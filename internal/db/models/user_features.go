@@ -49,7 +49,7 @@ var (
 			Name:        "漏洞扫描",
 			Code:        "webscan",
 			Description: "开启漏洞扫描组件功能",
-		}
+		},
 	}
 )
 
