@@ -40,6 +40,21 @@ var (
 			Code:        "finance",
 			Description: "开启费用账单相关功能",
 		},
+		{
+			Name:        "主机防护",
+			Code:        "hids",
+			Description: "开启主机防护组件功能",
+		},
+		{
+			Name:        "漏洞扫描",
+			Code:        "webscan",
+			Description: "开启漏洞扫描组件功能",
+		},
+		{
+			Name:        "监控告警",
+			Code:        "monitor",
+			Description: "开启监控告警组件功能",
+		},
 	}
 )
 
