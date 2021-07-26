@@ -14,6 +14,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
+	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/rands"
 	"github.com/iwind/TeaGo/types"
@@ -223,6 +224,8 @@ func (this *NodeDAO) ListEnabledNodesMatch(tx *dbs.Tx,
 	// 集群
 	if clusterId > 0 {
 		query.Attr("clusterId", clusterId)
+	} else {
+		query.Where("clusterId IN (SELECT id FROM " + SharedNodeClusterDAO.Table + " WHERE state=1)")
 	}
 
 	// 安装状态
@@ -330,6 +333,8 @@ func (this *NodeDAO) FindAllNodeIdsMatch(tx *dbs.Tx, clusterId int64, isOn confi
 	query.State(NodeStateEnabled)
 	if clusterId > 0 {
 		query.Attr("clusterId", clusterId)
+	} else {
+		query.Where("clusterId IN (SELECT id FROM " + SharedNodeClusterDAO.Table + " WHERE state=1)")
 	}
 	if isOn == configutils.BoolStateYes {
 		query.Attr("isOn", true)
@@ -387,6 +392,8 @@ func (this *NodeDAO) CountAllEnabledNodesMatch(tx *dbs.Tx,
 	// 集群
 	if clusterId > 0 {
 		query.Attr("clusterId", clusterId)
+	} else {
+		query.Where("clusterId IN (SELECT id FROM " + SharedNodeClusterDAO.Table + " WHERE state=1)")
 	}
 
 	// 安装状态
@@ -548,6 +555,7 @@ func (this *NodeDAO) ComposeNodeConfig(tx *dbs.Tx, nodeId int64) (*nodeconfigs.N
 	config := &nodeconfigs.NodeConfig{
 		Id:       int64(node.Id),
 		NodeId:   node.UniqueId,
+		Secret:   node.Secret,
 		IsOn:     node.IsOn == 1,
 		Servers:  nil,
 		Version:  int64(node.Version),
@@ -675,7 +683,7 @@ func (this *NodeDAO) ComposeNodeConfig(tx *dbs.Tx, nodeId int64) (*nodeconfigs.N
 		}
 	}
 
-	// 指标
+	// 集群指标
 	metricItemIds, err := SharedNodeClusterMetricItemDAO.FindAllClusterItemIds(tx, int64(node.ClusterId))
 	if err != nil {
 		return nil, err
@@ -690,6 +698,19 @@ func (this *NodeDAO) ComposeNodeConfig(tx *dbs.Tx, nodeId int64) (*nodeconfigs.N
 			metricItems = append(metricItems, itemConfig)
 		}
 	}
+
+	// 公用指标
+	publicMetricItems, err := SharedMetricItemDAO.FindAllPublicItems(tx)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range publicMetricItems {
+		itemConfig := SharedMetricItemDAO.ComposeItemConfigWithItem(item)
+		if itemConfig != nil && !lists.ContainsInt64(metricItemIds, itemConfig.Id) {
+			metricItems = append(metricItems, itemConfig)
+		}
+	}
+
 	config.MetricItems = metricItems
 
 	return config, nil

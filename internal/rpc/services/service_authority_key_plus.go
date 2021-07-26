@@ -1,4 +1,5 @@
 // Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
+// +build plus
 
 package services
 
@@ -8,6 +9,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/authority"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	plusutils "github.com/TeaOSLab/EdgePlus/pkg/utils"
 )
 
 // AuthorityKeyService 版本认证
@@ -44,6 +46,15 @@ func (this *AuthorityKeyService) ReadAuthorityKey(ctx context.Context, req *pb.R
 		return &pb.ReadAuthorityKeyResponse{AuthorityKey: nil}, nil
 	}
 
+	if len(key.Value) == 0 {
+		return &pb.ReadAuthorityKeyResponse{AuthorityKey: nil}, nil
+	}
+
+	m, err := plusutils.Decode([]byte(key.Value))
+	if err != nil {
+		return nil, err
+	}
+
 	macAddresses := []string{}
 	if len(key.MacAddresses) > 0 {
 		err = json.Unmarshal([]byte(key.MacAddresses), &macAddresses)
@@ -54,8 +65,8 @@ func (this *AuthorityKeyService) ReadAuthorityKey(ctx context.Context, req *pb.R
 
 	return &pb.ReadAuthorityKeyResponse{AuthorityKey: &pb.AuthorityKey{
 		Value:        key.Value,
-		DayFrom:      key.DayFrom,
-		DayTo:        key.DayTo,
+		DayFrom:      m.GetString("dayFrom"),
+		DayTo:        m.GetString("dayTo"),
 		Hostname:     key.Hostname,
 		MacAddresses: macAddresses,
 		Company:      key.Company,

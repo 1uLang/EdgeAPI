@@ -6,11 +6,30 @@ import (
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
+	"github.com/iwind/TeaGo/logs"
 	"github.com/iwind/TeaGo/maps"
+	"github.com/iwind/TeaGo/rands"
+	timeutil "github.com/iwind/TeaGo/utils/time"
 	"strconv"
+	"time"
 )
 
 type MetricStatDAO dbs.DAO
+
+func init() {
+	dbs.OnReadyDone(func() {
+		// 清理数据任务
+		var ticker = time.NewTicker(time.Duration(rands.Int(24, 48)) * time.Hour)
+		go func() {
+			for range ticker.C {
+				err := SharedMetricStatDAO.Clean(nil, 120) // 只保留120天
+				if err != nil {
+					logs.Println("SharedMetricStatDAO: clean expired data failed: " + err.Error())
+				}
+			}
+		}()
+	})
+}
 
 func NewMetricStatDAO() *MetricStatDAO {
 	return dbs.NewDAO(&MetricStatDAO{
@@ -47,15 +66,16 @@ func (this *MetricStatDAO) CreateStat(tx *dbs.Tx, hash string, clusterId int64, 
 	return this.Query(tx).
 		Param("value", value).
 		InsertOrUpdateQuickly(maps.Map{
-			"hash":      hash,
-			"clusterId": clusterId,
-			"nodeId":    nodeId,
-			"serverId":  serverId,
-			"itemId":    itemId,
-			"value":     value,
-			"time":      time,
-			"version":   version,
-			"keys":      keysString,
+			"hash":       hash,
+			"clusterId":  clusterId,
+			"nodeId":     nodeId,
+			"serverId":   serverId,
+			"itemId":     itemId,
+			"value":      value,
+			"time":       time,
+			"version":    version,
+			"keys":       keysString,
+			"createdDay": timeutil.Format("Ymd"),
 		}, maps.Map{
 			"value": value,
 		})
@@ -96,6 +116,39 @@ func (this *MetricStatDAO) ListItemStats(tx *dbs.Tx, itemId int64, version int32
 		Desc("time").
 		Desc("serverId").
 		Desc("value").
+		Slice(&result).
+		FindAll()
+	return
+}
+
+// FindItemStatsAtLastTime 取得所有集群最近一次计时前 N 个数据
+// 适合每条数据中包含不同的Key的场景
+func (this *MetricStatDAO) FindItemStatsAtLastTime(tx *dbs.Tx, itemId int64, version int32, size int64) (result []*MetricStat, err error) {
+	// 最近一次时间
+	statOne, err := this.Query(tx).
+		Attr("itemId", itemId).
+		Attr("version", version).
+		DescPk().
+		Find()
+	if err != nil {
+		return nil, err
+	}
+	if statOne == nil {
+		return nil, nil
+	}
+	var lastStat = statOne.(*MetricStat)
+	var lastTime = lastStat.Time
+
+	_, err = this.Query(tx).
+		Attr("itemId", itemId).
+		Attr("version", version).
+		Attr("time", lastTime).
+		// TODO 增加更多聚合算法，比如 AVG、MEDIAN、MIN、MAX 等
+		// TODO 这里的 MIN(`keys`) 在MySQL8中可以换成FIRST_VALUE
+		Result("MIN(time) AS time", "SUM(value) AS value", "keys").
+		Desc("value").
+		Group("keys").
+		Limit(size).
 		Slice(&result).
 		FindAll()
 	return
@@ -203,6 +256,27 @@ func (this *MetricStatDAO) FindItemStatsWithServerIdAndLastTime(tx *dbs.Tx, serv
 	return
 }
 
+// FindLatestItemStats 取得所有集群上最近 N 个时间的数据
+// 适合同个Key在不同时间段的变化场景
+func (this *MetricStatDAO) FindLatestItemStats(tx *dbs.Tx, itemId int64, version int32, size int64) (result []*MetricStat, err error) {
+	_, err = this.Query(tx).
+		Attr("itemId", itemId).
+		Attr("version", version).
+		// TODO 增加更多聚合算法，比如 AVG、MEDIAN、MIN、MAX 等
+		// TODO 这里的 MIN(`keys`) 在MySQL8中可以换成FIRST_VALUE
+		Result("time", "SUM(value) AS value", "MIN(`keys`) AS `keys`").
+		Desc("time").
+		Group("time").
+		Limit(size).
+		Slice(&result).
+		FindAll()
+	if err != nil {
+		return nil, err
+	}
+	lists.Reverse(result)
+	return
+}
+
 // FindLatestItemStatsWithClusterId 取得集群最近 N 个时间的数据
 // 适合同个Key在不同时间段的变化场景
 func (this *MetricStatDAO) FindLatestItemStatsWithClusterId(tx *dbs.Tx, clusterId int64, itemId int64, version int32, size int64) (result []*MetricStat, err error) {
@@ -267,4 +341,15 @@ func (this *MetricStatDAO) FindLatestItemStatsWithServerId(tx *dbs.Tx, serverId 
 	}
 	lists.Reverse(result)
 	return
+}
+
+// Clean 清理数据
+func (this *MetricStatDAO) Clean(tx *dbs.Tx, days int64) error {
+	_, err := this.Query(tx).
+		Lt("createdDay", timeutil.FormatTime("Ymd", time.Now().Unix()-days*86400)).
+		Delete()
+	if err != nil {
+		return err
+	}
+	return nil
 }

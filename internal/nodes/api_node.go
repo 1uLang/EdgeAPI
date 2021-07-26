@@ -262,13 +262,14 @@ func (this *APINode) autoUpgrade() error {
 			return nil
 		}
 	}
-	// 不使用remotelogs()，因为此时还没有启动完成
+
+	// 不使用remotelog()，因为此时还没有启动完成
 	logs.Println("[API_NODE]upgrade database starting ...")
 	err = setup.NewSQLExecutor(dbConfig).Run()
 	if err != nil {
 		return errors.New("execute sql failed: " + err.Error())
 	}
-	// 不使用remotelogs
+	// 不使用remotelog
 	logs.Println("[API_NODE]upgrade database done")
 	return nil
 }
@@ -292,7 +293,10 @@ func (this *APINode) setupDB() error {
 			if valueInt < 65535 {
 				_, err := db.Exec("SET GLOBAL max_prepared_stmt_count=65535")
 				if err != nil {
-					return err
+					return errors.New("run 'SET GLOBAL max_prepared_stmt_count' on database failed: " + err.Error() + ", \nyou can change the variable in 'my.cnf': \n~~~\n" + `[mysqld]
+max_prepared_stmt_count=65535
+~~~
+then restart mysqld.`)
 				}
 			}
 		}
@@ -315,7 +319,7 @@ func (this *APINode) listenPorts(apiNode *models.APINode) (isListening bool) {
 			for _, addr := range listen.Addresses() {
 				listener, err := net.Listen("tcp", addr)
 				if err != nil {
-					remotelogs.Error("API_NODE", "listening '"+addr+"' failed: "+err.Error() + ", we will try to listen port only")
+					remotelogs.Error("API_NODE", "listening '"+addr+"' failed: "+err.Error()+", we will try to listen port only")
 
 					// 试着只监听端口
 					_, port, err := net.SplitHostPort(addr)
@@ -363,7 +367,7 @@ func (this *APINode) listenPorts(apiNode *models.APINode) (isListening bool) {
 			for _, addr := range listen.Addresses() {
 				listener, err := net.Listen("tcp", addr)
 				if err != nil {
-					remotelogs.Error("API_NODE", "listening '"+addr+"' failed: "+err.Error() + ", we will try to listen port only")
+					remotelogs.Error("API_NODE", "listening '"+addr+"' failed: "+err.Error()+", we will try to listen port only")
 					// 试着只监听端口
 					_, port, err := net.SplitHostPort(addr)
 					if err != nil {
