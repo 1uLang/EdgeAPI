@@ -39,7 +39,7 @@ func (this *NSRecordService) UpdateNSRecord(ctx context.Context, req *pb.UpdateN
 	}
 
 	var tx = this.NullTx()
-	err = nameservers.SharedNSRecordDAO.UpdateRecord(tx, req.NsRecordId, req.Description, req.Name, req.Type, req.Value, req.Ttl, req.NsRouteIds)
+	err = nameservers.SharedNSRecordDAO.UpdateRecord(tx, req.NsRecordId, req.Description, req.Name, req.Type, req.Value, req.Ttl, req.NsRouteIds, req.IsOn)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +193,10 @@ func (this *NSRecordService) ListNSRecordsAfterVersion(ctx context.Context, req 
 
 	// 集群ID
 	var tx = this.NullTx()
-	records, err := nameservers.SharedNSRecordDAO.ListRecordsAfterVersion(tx, req.Version, 2000)
+	if req.Size <= 0 {
+		req.Size = 2000
+	}
+	records, err := nameservers.SharedNSRecordDAO.ListRecordsAfterVersion(tx, req.Version, req.Size)
 	if err != nil {
 		return nil, err
 	}

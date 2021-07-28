@@ -12,7 +12,10 @@ import (
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
+	"github.com/iwind/TeaGo/dbs"
+	"github.com/iwind/TeaGo/types"
 	timeutil "github.com/iwind/TeaGo/utils/time"
 	"time"
 )
@@ -468,7 +471,7 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		return nil, err
 	}
 
-	resp := &pb.ComposeAdminDashboardResponse{}
+	result := &pb.ComposeAdminDashboardResponse{}
 
 	var tx = this.NullTx()
 
@@ -477,49 +480,49 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 	if err != nil {
 		return nil, err
 	}
-	resp.CountNodeClusters = countClusters
+	result.CountNodeClusters = countClusters
 
 	// 节点数
 	countNodes, err := models.SharedNodeDAO.CountAllEnabledNodes(tx)
 	if err != nil {
 		return nil, err
 	}
-	resp.CountNodes = countNodes
+	result.CountNodes = countNodes
 
 	// 服务数
 	countServers, err := models.SharedServerDAO.CountAllEnabledServers(tx)
 	if err != nil {
 		return nil, err
 	}
-	resp.CountServers = countServers
+	result.CountServers = countServers
 
 	// 用户数
 	countUsers, err := models.SharedUserDAO.CountAllEnabledUsers(tx, 0, "")
 	if err != nil {
 		return nil, err
 	}
-	resp.CountUsers = countUsers
+	result.CountUsers = countUsers
 
 	// API节点数
 	countAPINodes, err := models.SharedAPINodeDAO.CountAllEnabledAPINodes(tx)
 	if err != nil {
 		return nil, err
 	}
-	resp.CountAPINodes = countAPINodes
+	result.CountAPINodes = countAPINodes
 
 	// 数据库节点数
 	countDBNodes, err := models.SharedDBNodeDAO.CountAllEnabledNodes(tx)
 	if err != nil {
 		return nil, err
 	}
-	resp.CountDBNodes = countDBNodes
+	result.CountDBNodes = countDBNodes
 
 	// 用户节点数
 	countUserNodes, err := models.SharedUserNodeDAO.CountAllEnabledUserNodes(tx)
 	if err != nil {
 		return nil, err
 	}
-	resp.CountUserNodes = countUserNodes
+	result.CountUserNodes = countUserNodes
 
 	// 按日流量统计
 	dayFrom := timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
@@ -528,9 +531,14 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		return nil, err
 	}
 	for _, stat := range dailyTrafficStats {
-		resp.DailyTrafficStats = append(resp.DailyTrafficStats, &pb.ComposeAdminDashboardResponse_DailyTrafficStat{
-			Day:   stat.Day,
-			Bytes: int64(stat.Bytes),
+		result.DailyTrafficStats = append(result.DailyTrafficStats, &pb.ComposeAdminDashboardResponse_DailyTrafficStat{
+			Day:                 stat.Day,
+			Bytes:               int64(stat.Bytes),
+			CachedBytes:         int64(stat.CachedBytes),
+			CountRequests:       int64(stat.CountRequests),
+			CountCachedRequests: int64(stat.CountCachedRequests),
+			CountAttackRequests: int64(stat.CountAttackRequests),
+			AttackBytes:         int64(stat.AttackBytes),
 		})
 	}
 
@@ -542,9 +550,14 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		return nil, err
 	}
 	for _, stat := range hourlyTrafficStats {
-		resp.HourlyTrafficStats = append(resp.HourlyTrafficStats, &pb.ComposeAdminDashboardResponse_HourlyTrafficStat{
-			Hour:  stat.Hour,
-			Bytes: int64(stat.Bytes),
+		result.HourlyTrafficStats = append(result.HourlyTrafficStats, &pb.ComposeAdminDashboardResponse_HourlyTrafficStat{
+			Hour:                stat.Hour,
+			Bytes:               int64(stat.Bytes),
+			CachedBytes:         int64(stat.CachedBytes),
+			CountRequests:       int64(stat.CountRequests),
+			CountCachedRequests: int64(stat.CountCachedRequests),
+			CountAttackRequests: int64(stat.CountAttackRequests),
+			AttackBytes:         int64(stat.AttackBytes),
 		})
 	}
 
@@ -564,7 +577,7 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 			return nil, err
 		}
 		upgradeInfo.CountNodes = countNodes
-		resp.NodeUpgradeInfo = upgradeInfo
+		result.NodeUpgradeInfo = upgradeInfo
 	}
 
 	// 监控节点升级信息
@@ -577,7 +590,7 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 			return nil, err
 		}
 		upgradeInfo.CountNodes = countNodes
-		resp.MonitorNodeUpgradeInfo = upgradeInfo
+		result.MonitorNodeUpgradeInfo = upgradeInfo
 	}
 
 	// 认证节点升级信息
@@ -590,7 +603,7 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 			return nil, err
 		}
 		upgradeInfo.CountNodes = countNodes
-		resp.AuthorityNodeUpgradeInfo = upgradeInfo
+		result.AuthorityNodeUpgradeInfo = upgradeInfo
 	}
 
 	// 用户节点升级信息
@@ -603,7 +616,7 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 			return nil, err
 		}
 		upgradeInfo.CountNodes = countNodes
-		resp.UserNodeUpgradeInfo = upgradeInfo
+		result.UserNodeUpgradeInfo = upgradeInfo
 	}
 
 	// API节点升级信息
@@ -616,7 +629,7 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 			return nil, err
 		}
 		upgradeInfo.CountNodes = countNodes
-		resp.ApiNodeUpgradeInfo = upgradeInfo
+		result.ApiNodeUpgradeInfo = upgradeInfo
 	}
 
 	// DNS节点升级信息
@@ -629,10 +642,56 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 			return nil, err
 		}
 		upgradeInfo.CountNodes = countNodes
-		resp.NsNodeUpgradeInfo = upgradeInfo
+		result.NsNodeUpgradeInfo = upgradeInfo
 	}
 
-	return resp, nil
+	// 域名排行
+	if isPlus {
+		topDomainStats, err := stats.SharedServerDomainHourlyStatDAO.FindTopDomainStats(tx, hourFrom, hourTo, 10)
+		if err != nil {
+			return nil, err
+		}
+		for _, stat := range topDomainStats {
+			result.TopDomainStats = append(result.TopDomainStats, &pb.ComposeAdminDashboardResponse_DomainStat{
+				ServerId:      int64(stat.ServerId),
+				Domain:        stat.Domain,
+				CountRequests: int64(stat.CountRequests),
+				Bytes:         int64(stat.Bytes),
+			})
+		}
+	}
+
+	// 节点排行
+	if isPlus {
+		topNodeStats, err := stats.SharedNodeTrafficHourlyStatDAO.FindTopNodeStats(tx, "node", hourFrom, hourTo)
+		if err != nil {
+			return nil, err
+		}
+		for _, stat := range topNodeStats {
+			nodeName, err := models.SharedNodeDAO.FindNodeName(tx, int64(stat.NodeId))
+			if err != nil {
+				return nil, err
+			}
+			if len(nodeName) == 0 {
+				continue
+			}
+			result.TopNodeStats = append(result.TopNodeStats, &pb.ComposeAdminDashboardResponse_NodeStat{
+				NodeId:        int64(stat.NodeId),
+				NodeName:      nodeName,
+				CountRequests: int64(stat.CountRequests),
+				Bytes:         int64(stat.Bytes),
+			})
+		}
+	}
+
+	// 指标数据
+	pbCharts, err := this.findMetricDataCharts(tx)
+	if err != nil {
+		return nil, err
+	}
+	result.MetricDataCharts = pbCharts
+
+	return result, nil
 }
 
 // UpdateAdminTheme 修改管理员使用的界面风格
@@ -647,4 +706,112 @@ func (this *AdminService) UpdateAdminTheme(ctx context.Context, req *pb.UpdateAd
 		return nil, err
 	}
 	return this.Success()
+}
+
+// 查找集群、节点和服务的指标数据
+func (this *AdminService) findMetricDataCharts(tx *dbs.Tx) (result []*pb.MetricDataChart, err error) {
+	// 集群指标
+	items, err := models.SharedMetricItemDAO.FindAllPublicItems(tx)
+	if err != nil {
+		return nil, err
+	}
+	var pbMetricCharts = []*pb.MetricDataChart{}
+	for _, item := range items {
+		var itemId = int64(item.Id)
+		charts, err := models.SharedMetricChartDAO.FindAllEnabledCharts(tx, itemId)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, chart := range charts {
+			if chart.IsOn == 0 {
+				continue
+			}
+
+			var pbChart = &pb.MetricChart{
+				Id:         int64(chart.Id),
+				Name:       chart.Name,
+				Type:       chart.Type,
+				WidthDiv:   chart.WidthDiv,
+				ParamsJSON: nil,
+				IsOn:       chart.IsOn == 1,
+				MaxItems:   types.Int32(chart.MaxItems),
+				MetricItem: &pb.MetricItem{
+					Id:         itemId,
+					PeriodUnit: item.PeriodUnit,
+					Period:     types.Int32(item.Period),
+					Name:       item.Name,
+					Value:      item.Value,
+					Category:   item.Category,
+					Keys:       item.DecodeKeys(),
+					Code:       item.Code,
+					IsOn:       item.IsOn == 1,
+				},
+			}
+			var pbStats = []*pb.MetricStat{}
+			switch chart.Type {
+			case serverconfigs.MetricChartTypeTimeLine:
+				itemStats, err := models.SharedMetricStatDAO.FindLatestItemStats(tx, itemId, types.Int32(item.Version), 10)
+				if err != nil {
+					return nil, err
+				}
+
+				for _, stat := range itemStats {
+					// 当前时间总和
+					count, total, err := models.SharedMetricSumStatDAO.FindSumAtTime(tx, stat.Time, itemId, types.Int32(item.Version))
+					if err != nil {
+						return nil, err
+					}
+
+					pbStats = append(pbStats, &pb.MetricStat{
+						Id:          int64(stat.Id),
+						Hash:        stat.Hash,
+						ServerId:    0,
+						ItemId:      0,
+						Keys:        stat.DecodeKeys(),
+						Value:       types.Float32(stat.Value),
+						Time:        stat.Time,
+						Version:     0,
+						NodeCluster: nil,
+						Node:        nil,
+						Server:      nil,
+						SumCount:    count,
+						SumTotal:    total,
+					})
+				}
+			default:
+				itemStats, err := models.SharedMetricStatDAO.FindItemStatsAtLastTime(tx, itemId, types.Int32(item.Version), 10)
+				if err != nil {
+					return nil, err
+				}
+				for _, stat := range itemStats {
+					count, total, err := models.SharedMetricSumStatDAO.FindSumAtTime(tx, stat.Time, itemId, types.Int32(item.Version))
+					if err != nil {
+						return nil, err
+					}
+
+					pbStats = append(pbStats, &pb.MetricStat{
+						Id:          int64(stat.Id),
+						Hash:        stat.Hash,
+						ServerId:    0,
+						ItemId:      0,
+						Keys:        stat.DecodeKeys(),
+						Value:       types.Float32(stat.Value),
+						Time:        stat.Time,
+						Version:     0,
+						NodeCluster: nil,
+						Node:        nil,
+						Server:      nil,
+						SumCount:    count,
+						SumTotal:    total,
+					})
+				}
+			}
+			pbMetricCharts = append(pbMetricCharts, &pb.MetricDataChart{
+				MetricChart: pbChart,
+				MetricStats: pbStats,
+			})
+		}
+	}
+	return pbMetricCharts, nil
 }

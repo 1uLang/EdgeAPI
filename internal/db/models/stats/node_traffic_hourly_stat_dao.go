@@ -8,6 +8,7 @@ import (
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/maps"
+	"github.com/iwind/TeaGo/rands"
 	timeutil "github.com/iwind/TeaGo/utils/time"
 	"time"
 )
@@ -17,7 +18,7 @@ type NodeTrafficHourlyStatDAO dbs.DAO
 func init() {
 	dbs.OnReadyDone(func() {
 		// 清理数据任务
-		var ticker = time.NewTicker(24 * time.Hour)
+		var ticker = time.NewTicker(time.Duration(rands.Int(24, 48)) * time.Hour)
 		go func() {
 			for range ticker.C {
 				err := SharedNodeTrafficHourlyStatDAO.Clean(nil, 60) // 只保留60天
@@ -49,7 +50,7 @@ func init() {
 }
 
 // IncreaseHourlyStat 增加统计数据
-func (this *NodeTrafficHourlyStatDAO) IncreaseHourlyStat(tx *dbs.Tx, clusterId int64, role string, nodeId int64, hour string, bytes int64, cachedBytes int64, countRequests int64, countCachedRequests int64) error {
+func (this *NodeTrafficHourlyStatDAO) IncreaseHourlyStat(tx *dbs.Tx, clusterId int64, role string, nodeId int64, hour string, bytes int64, cachedBytes int64, countRequests int64, countCachedRequests int64, countAttackRequests int64, attackBytes int64) error {
 	if len(hour) != 10 {
 		return errors.New("invalid hour '" + hour + "'")
 	}
@@ -58,6 +59,8 @@ func (this *NodeTrafficHourlyStatDAO) IncreaseHourlyStat(tx *dbs.Tx, clusterId i
 		Param("cachedBytes", cachedBytes).
 		Param("countRequests", countRequests).
 		Param("countCachedRequests", countCachedRequests).
+		Param("countAttackRequests", countAttackRequests).
+		Param("attackBytes", attackBytes).
 		InsertOrUpdateQuickly(maps.Map{
 			"clusterId":           clusterId,
 			"role":                role,
@@ -67,11 +70,15 @@ func (this *NodeTrafficHourlyStatDAO) IncreaseHourlyStat(tx *dbs.Tx, clusterId i
 			"cachedBytes":         cachedBytes,
 			"countRequests":       countRequests,
 			"countCachedRequests": countCachedRequests,
+			"countAttackRequests": countAttackRequests,
+			"attackBytes":         attackBytes,
 		}, maps.Map{
 			"bytes":               dbs.SQL("bytes+:bytes"),
 			"cachedBytes":         dbs.SQL("cachedBytes+:cachedBytes"),
 			"countRequests":       dbs.SQL("countRequests+:countRequests"),
 			"countCachedRequests": dbs.SQL("countCachedRequests+:countCachedRequests"),
+			"countAttackRequests": dbs.SQL("countAttackRequests+:countAttackRequests"),
+			"attackBytes":         dbs.SQL("attackBytes+:attackBytes"),
 		})
 	if err != nil {
 		return err
@@ -84,7 +91,7 @@ func (this *NodeTrafficHourlyStatDAO) FindHourlyStatsWithClusterId(tx *dbs.Tx, c
 	ones, err := this.Query(tx).
 		Attr("clusterId", clusterId).
 		Between("hour", hourFrom, hourTo).
-		Result("hour, SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests").
+		Result("hour, SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes").
 		Group("hour").
 		FindAll()
 	if err != nil {
@@ -110,6 +117,20 @@ func (this *NodeTrafficHourlyStatDAO) FindHourlyStatsWithClusterId(tx *dbs.Tx, c
 	return result, nil
 }
 
+// FindTopNodeStats 取得一定时间内的节点排行数据
+func (this *NodeTrafficHourlyStatDAO) FindTopNodeStats(tx *dbs.Tx, role string, hourFrom string, hourTo string) (result []*NodeTrafficHourlyStat, err error) {
+	// TODO 节点如果已经被删除，则忽略
+	_, err = this.Query(tx).
+		Attr("role", role).
+		Between("hour", hourFrom, hourTo).
+		Result("nodeId, SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes").
+		Group("nodeId").
+		Desc("countRequests").
+		Slice(&result).
+		FindAll()
+	return
+}
+
 // FindTopNodeStatsWithClusterId 取得集群一定时间内的节点排行数据
 func (this *NodeTrafficHourlyStatDAO) FindTopNodeStatsWithClusterId(tx *dbs.Tx, role string, clusterId int64, hourFrom string, hourTo string) (result []*NodeTrafficHourlyStat, err error) {
 	// TODO 节点如果已经被删除，则忽略
@@ -117,7 +138,7 @@ func (this *NodeTrafficHourlyStatDAO) FindTopNodeStatsWithClusterId(tx *dbs.Tx, 
 		Attr("role", role).
 		Attr("clusterId", clusterId).
 		Between("hour", hourFrom, hourTo).
-		Result("nodeId, SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests").
+		Result("nodeId, SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes").
 		Group("nodeId").
 		Desc("countRequests").
 		Slice(&result).
@@ -131,7 +152,7 @@ func (this *NodeTrafficHourlyStatDAO) FindHourlyStatsWithNodeId(tx *dbs.Tx, role
 		Attr("role", role).
 		Attr("nodeId", nodeId).
 		Between("hour", hourFrom, hourTo).
-		Result("hour, SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests").
+		Result("hour, SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes").
 		Group("hour").
 		FindAll()
 	if err != nil {

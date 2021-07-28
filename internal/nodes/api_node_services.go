@@ -14,6 +14,11 @@ import (
 // 注册服务
 func (this *APINode) registerServices(server *grpc.Server) {
 	{
+		instance := this.serviceInstance(&services.APITokenService{}).(*services.APITokenService)
+		pb.RegisterAPITokenServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
 		instance := this.serviceInstance(&services.AdminService{}).(*services.AdminService)
 		pb.RegisterAdminServiceServer(server, instance)
 		this.rest(instance)
@@ -389,11 +394,6 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		this.rest(instance)
 	}
 	{
-		instance := this.serviceInstance(&services.AuthorityKeyService{}).(*services.AuthorityKeyService)
-		pb.RegisterAuthorityKeyServiceServer(server, instance)
-		this.rest(instance)
-	}
-	{
 		instance := this.serviceInstance(&services.AuthorityNodeService{}).(*services.AuthorityNodeService)
 		pb.RegisterAuthorityNodeServiceServer(server, instance)
 		this.rest(instance)
@@ -436,6 +436,11 @@ func (this *APINode) registerServices(server *grpc.Server) {
 	{
 		instance := this.serviceInstance(&nameservers.NSRouteService{}).(*nameservers.NSRouteService)
 		pb.RegisterNSRouteServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		instance := this.serviceInstance(&nameservers.NSKeyService{}).(*nameservers.NSKeyService)
+		pb.RegisterNSKeyServiceServer(server, instance)
 		this.rest(instance)
 	}
 	{
@@ -490,6 +495,8 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		pb.RegisterServerStatBoardChartServiceServer(server, instance)
 		this.rest(instance)
 	}
+
+	APINodeServicesRegister(this, server)
 
 	// TODO check service names
 	for serviceName := range server.GetServiceInfo() {
