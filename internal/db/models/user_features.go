@@ -50,6 +50,11 @@ var (
 			Code:        "webscan",
 			Description: "开启漏洞扫描组件功能",
 		},
+		{
+			Name:        "堡垒机",
+			Code:        "fort",
+			Description: "开启堡垒机组件功能",
+		},
 	}
 )
 
