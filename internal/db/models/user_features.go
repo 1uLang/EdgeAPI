@@ -35,11 +35,11 @@ var (
 			Code:        "server.waf",
 			Description: "用户可以开启WAF功能并可以设置黑白名单等",
 		},
-		{
-			Name:        "费用账单",
-			Code:        "finance",
-			Description: "开启费用账单相关功能",
-		},
+		//{
+		//	Name:        "费用账单",
+		//	Code:        "finance",
+		//	Description: "开启费用账单相关功能",
+		//},
 		{
 			Name:        "主机防护",
 			Code:        "hids",
