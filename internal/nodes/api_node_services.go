@@ -496,7 +496,7 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		this.rest(instance)
 	}
 
-	APINodeServicesRegister(this, server)
+	//APINodeServicesRegister(this, server)
 
 	// TODO check service names
 	for serviceName := range server.GetServiceInfo() {
