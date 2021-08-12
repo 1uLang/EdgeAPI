@@ -7,3 +7,7 @@ import "google.golang.org/grpc"
 
 func APINodeServicesRegister(node *APINode, server *grpc.Server) {
 }
+
+func APIAuthorityKeyServicesRegister(node *APINode, server *grpc.Server) {
+
+}
