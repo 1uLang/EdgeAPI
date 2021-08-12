@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"path/filepath"
 	"regexp"
 )
@@ -36,7 +37,7 @@ func (this *NodeInstaller) Install(dir string, params interface{}, installStatus
 	}
 
 	// 安装助手
-	env, err := this.InstallHelper(dir)
+	env, err := this.InstallHelper(dir, nodeconfigs.NodeRoleNode)
 	if err != nil {
 		installStatus.ErrorCode = "INSTALL_HELPER_FAILED"
 		return err
@@ -95,12 +96,11 @@ func (this *NodeInstaller) Install(dir string, params interface{}, installStatus
 
 	// 修改配置文件
 	{
-		templateFile := dir + "/edge-node/configs/api.template.yaml"
 		configFile := dir + "/edge-node/configs/api.yaml"
-		data, err := this.client.ReadFile(templateFile)
-		if err != nil {
-			return err
-		}
+		var data = []byte(`rpc:
+  endpoints: [ ${endpoints} ]
+nodeId: "${nodeId}"
+secret: "${nodeSecret}"`)
 
 		data = bytes.ReplaceAll(data, []byte("${endpoints}"), []byte(nodeParams.QuoteEndpoints()))
 		data = bytes.ReplaceAll(data, []byte("${nodeId}"), []byte(nodeParams.NodeId))

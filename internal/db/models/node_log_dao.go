@@ -7,6 +7,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
+	"github.com/iwind/TeaGo/types"
 	stringutil "github.com/iwind/TeaGo/utils/string"
 	timeutil "github.com/iwind/TeaGo/utils/time"
 	"strconv"
@@ -36,8 +37,8 @@ func init() {
 }
 
 // CreateLog 创建日志
-func (this *NodeLogDAO) CreateLog(tx *dbs.Tx, nodeRole nodeconfigs.NodeRole, nodeId int64, serverId int64, level string, tag string, description string, createdAt int64) error {
-	hash := stringutil.Md5(nodeRole + "@" + strconv.FormatInt(nodeId, 10) + "@" + strconv.FormatInt(serverId, 10) + "@" + level + "@" + tag + "@" + description)
+func (this *NodeLogDAO) CreateLog(tx *dbs.Tx, nodeRole nodeconfigs.NodeRole, nodeId int64, serverId int64, originId int64, level string, tag string, description string, createdAt int64) error {
+	hash := stringutil.Md5(nodeRole + "@" + types.String(nodeId) + "@" + types.String(serverId) + "@" + types.String(originId) + "@" + level + "@" + tag + "@" + description)
 
 	// 检查是否在重复最后一条，避免重复创建
 	lastLog, err := this.Query(tx).
@@ -62,6 +63,7 @@ func (this *NodeLogDAO) CreateLog(tx *dbs.Tx, nodeRole nodeconfigs.NodeRole, nod
 	op.Role = nodeRole
 	op.NodeId = nodeId
 	op.ServerId = serverId
+	op.OriginId = originId
 	op.Level = level
 	op.Tag = tag
 	op.Description = description
@@ -88,7 +90,7 @@ func (this *NodeLogDAO) DeleteExpiredLogs(tx *dbs.Tx, days int) error {
 }
 
 // CountNodeLogs 计算节点日志数量
-func (this *NodeLogDAO) CountNodeLogs(tx *dbs.Tx, role string, nodeId int64, serverId int64, dayFrom string, dayTo string, keyword string, level string) (int64, error) {
+func (this *NodeLogDAO) CountNodeLogs(tx *dbs.Tx, role string, nodeId int64, serverId int64, originId int64, dayFrom string, dayTo string, keyword string, level string) (int64, error) {
 	query := this.Query(tx).
 		Attr("role", role)
 	if nodeId > 0 {
@@ -96,13 +98,16 @@ func (this *NodeLogDAO) CountNodeLogs(tx *dbs.Tx, role string, nodeId int64, ser
 	} else {
 		switch role {
 		case nodeconfigs.NodeRoleNode:
-			query.Where("nodeId IN (SELECT id FROM " + SharedNodeDAO.Table + " WHERE state=1)")
+			query.Where("nodeId IN (SELECT id FROM " + SharedNodeDAO.Table + " WHERE state=1 AND clusterId>0)")
 		case nodeconfigs.NodeRoleDNS:
-			query.Where("nodeId IN (SELECT id FROM edgeNSNodes WHERE state=1)") // 没有用 SharedNSNodeDAO() 因为有包循环引用的问题
+			query.Where("nodeId IN (SELECT id FROM edgeNSNodes WHERE state=1 AND clusterId > 0)") // 没有用 SharedNSNodeDAO() 因为有包循环引用的问题
 		}
 	}
 	if serverId > 0 {
 		query.Attr("serverId", serverId)
+	}
+	if originId > 0 {
+		query.Attr("originId", originId)
 	}
 	if len(dayFrom) > 0 {
 		dayFrom = strings.ReplaceAll(dayFrom, "-", "")
@@ -128,6 +133,7 @@ func (this *NodeLogDAO) ListNodeLogs(tx *dbs.Tx,
 	role string,
 	nodeId int64,
 	serverId int64,
+	originId int64,
 	allServers bool,
 	dayFrom string,
 	dayTo string,
@@ -143,15 +149,18 @@ func (this *NodeLogDAO) ListNodeLogs(tx *dbs.Tx,
 	} else {
 		switch role {
 		case nodeconfigs.NodeRoleNode:
-			query.Where("nodeId IN (SELECT id FROM " + SharedNodeDAO.Table + " WHERE state=1)")
+			query.Where("nodeId IN (SELECT id FROM " + SharedNodeDAO.Table + " WHERE state=1 AND clusterId>0)")
 		case nodeconfigs.NodeRoleDNS:
-			query.Where("nodeId IN (SELECT id FROM edgeNSNodes WHERE state=1)") // 没有用 SharedNSNodeDAO() 因为有包循环引用的问题
+			query.Where("nodeId IN (SELECT id FROM edgeNSNodes WHERE state=1 AND clusterId>0)") // 没有用 SharedNSNodeDAO() 因为有包循环引用的问题
 		}
 	}
 	if serverId > 0 {
 		query.Attr("serverId", serverId)
 	} else if allServers {
 		query.Where("serverId>0")
+	}
+	if originId > 0 {
+		query.Attr("originId", originId)
 	}
 	if fixedState == configutils.BoolStateYes {
 		query.Attr("isFixed", 1)

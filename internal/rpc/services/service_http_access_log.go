@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"github.com/TeaOSLab/EdgeAPI/internal/accesslogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
@@ -29,6 +30,18 @@ func (this *HTTPAccessLogService) CreateHTTPAccessLogs(ctx context.Context, req 
 	err = models.SharedHTTPAccessLogDAO.CreateHTTPAccessLogs(tx, req.HttpAccessLogs)
 	if err != nil {
 		return nil, err
+	}
+
+	// 发送到访问日志策略
+	policyId, err := models.SharedHTTPAccessLogPolicyDAO.FindCurrentPublicPolicyId(tx)
+	if err != nil {
+		return nil, err
+	}
+	if policyId > 0 {
+		err = accesslogs.SharedStorageManager.Write(policyId, req.HttpAccessLogs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &pb.CreateHTTPAccessLogsResponse{}, nil
@@ -59,17 +72,56 @@ func (this *HTTPAccessLogService) ListHTTPAccessLogs(ctx context.Context, req *p
 		}
 	}
 
-	accessLogs, requestId, hasMore, err := models.SharedHTTPAccessLogDAO.ListAccessLogs(tx, req.RequestId, req.Size, req.Day, req.ServerId, req.Reverse, req.HasError, req.FirewallPolicyId, req.FirewallRuleGroupId, req.FirewallRuleSetId, req.HasFirewallPolicy, req.UserId, req.Keyword)
+	accessLogs, requestId, hasMore, err := models.SharedHTTPAccessLogDAO.ListAccessLogs(tx, req.RequestId, req.Size, req.Day, req.ServerId, req.Reverse, req.HasError, req.FirewallPolicyId, req.FirewallRuleGroupId, req.FirewallRuleSetId, req.HasFirewallPolicy, req.UserId, req.Keyword, req.Ip, req.Domain)
 	if err != nil {
 		return nil, err
 	}
 
 	result := []*pb.HTTPAccessLog{}
+	var pbNodeMap = map[int64]*pb.Node{}
+	var pbClusterMap = map[int64]*pb.NodeCluster{}
 	for _, accessLog := range accessLogs {
 		a, err := accessLog.ToPB()
 		if err != nil {
 			return nil, err
 		}
+
+		// 节点 & 集群
+		pbNode, ok := pbNodeMap[a.NodeId]
+		if ok {
+			a.Node = pbNode
+		} else {
+			node, err := models.SharedNodeDAO.FindEnabledNode(tx, a.NodeId)
+			if err != nil {
+				return nil, err
+			}
+			if node != nil {
+				pbNode = &pb.Node{Id: int64(node.Id), Name: node.Name}
+
+				var clusterId = int64(node.ClusterId)
+				pbCluster, ok := pbClusterMap[clusterId]
+				if ok {
+					pbNode.NodeCluster = pbCluster
+				} else {
+					cluster, err := models.SharedNodeClusterDAO.FindEnabledNodeCluster(tx, clusterId)
+					if err != nil {
+						return nil, err
+					}
+					if cluster != nil {
+						pbCluster = &pb.NodeCluster{
+							Id:   int64(cluster.Id),
+							Name: cluster.Name,
+						}
+						pbNode.NodeCluster = pbCluster
+						pbClusterMap[clusterId] = pbCluster
+					}
+				}
+
+				pbNodeMap[a.NodeId] = pbNode
+				a.Node = pbNode
+			}
+		}
+
 		result = append(result, a)
 	}
 

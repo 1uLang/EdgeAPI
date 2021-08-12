@@ -44,12 +44,13 @@ func main() {
 		_, _ = os.Stdout.Write(resultJSON)
 	})
 	app.On("upgrade", func() {
+		fmt.Println("start ...")
 		executor, err := setup.NewSQLExecutorFromCmd()
 		if err != nil {
 			fmt.Println("ERROR: " + err.Error())
 			return
 		}
-		err = executor.Run()
+		err = executor.Run(true)
 		if err != nil {
 			fmt.Println("ERROR: " + err.Error())
 			return

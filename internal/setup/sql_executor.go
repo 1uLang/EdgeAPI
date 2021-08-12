@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/go-yaml/yaml"
 	"github.com/iwind/TeaGo/Tea"
@@ -14,13 +16,12 @@ import (
 	"github.com/iwind/TeaGo/types"
 	stringutil "github.com/iwind/TeaGo/utils/string"
 	"io/ioutil"
-	"strings"
 	"time"
 )
 
 var LatestSQLResult = &SQLDumpResult{}
 
-// 安装或升级SQL执行器
+// SQLExecutor 安装或升级SQL执行器
 type SQLExecutor struct {
 	dbConfig *dbs.DBConfig
 }
@@ -45,14 +46,14 @@ func NewSQLExecutorFromCmd() (*SQLExecutor, error) {
 	return NewSQLExecutor(config.DBs[Tea.Env]), nil
 }
 
-func (this *SQLExecutor) Run() error {
+func (this *SQLExecutor) Run(showLog bool) error {
 	db, err := dbs.NewInstanceFromConfig(this.dbConfig)
 	if err != nil {
 		return err
 	}
 
 	sqlDump := NewSQLDump()
-	_, err = sqlDump.Apply(db, LatestSQLResult)
+	_, err = sqlDump.Apply(db, LatestSQLResult, showLog)
 	if err != nil {
 		return err
 	}
@@ -100,6 +101,12 @@ func (this *SQLExecutor) checkData(db *dbs.DB) error {
 
 	// 检查指标设置
 	err = this.checkMetricItems(db)
+	if err != nil {
+		return err
+	}
+
+	// 检查自建DNS全局设置
+	err = this.checkNS(db)
 	if err != nil {
 		return err
 	}
@@ -271,7 +278,6 @@ func (this *SQLExecutor) checkMetricItems(db *dbs.DB) error {
 			return err
 		}
 
-		var itemId int64 = 0
 		if len(itemMap) == 0 {
 			keysJSON, err := json.Marshal(keys)
 			if err != nil {
@@ -289,7 +295,7 @@ func (this *SQLExecutor) checkMetricItems(db *dbs.DB) error {
 			}
 		}
 
-		itemId = itemMap.GetInt64("id")
+		var itemId = itemMap.GetInt64("id")
 
 		// chart
 		for _, chartMap := range chartMaps {
@@ -379,6 +385,47 @@ func (this *SQLExecutor) checkMetricItems(db *dbs.DB) error {
 		}
 	}
 
+	{
+		err := createMetricItem("request_referer_host", serverconfigs.MetricItemCategoryHTTP, "请求来源统计", []string{"${referer.host}"}, 1, "day", "${countRequest}", []maps.Map{
+			{
+				"name":     "请求来源排行",
+				"type":     "bar",
+				"widthDiv": 0,
+				"code":     "request_referer_host_bar",
+			},
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// 检查自建DNS全局设置
+func (this *SQLExecutor) checkNS(db *dbs.DB) error {
+	// 访问日志
+	{
+		one, err := db.FindOne("SELECT id FROM edgeSysSettings WHERE code=? LIMIT 1", systemconfigs.SettingCodeNSAccessLogSetting)
+		if err != nil {
+			return err
+		}
+		if len(one) == 0 {
+			ref := &dnsconfigs.NSAccessLogRef{
+				IsPrior:           false,
+				IsOn:              true,
+				LogMissingDomains: false,
+			}
+			refJSON, err := json.Marshal(ref)
+			if err != nil {
+				return err
+			}
+			_, err = db.Exec("INSERT edgeSysSettings (code, value) VALUES (?, ?)", systemconfigs.SettingCodeNSAccessLogSetting, refJSON)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -411,18 +458,4 @@ func (this *SQLExecutor) updateVersion(db *dbs.DB, version string) error {
 	}
 
 	return nil
-}
-
-// 判断某个错误是否可以忽略
-func (this *SQLExecutor) canIgnoreError(err error) bool {
-	if err == nil {
-		return true
-	}
-
-	// Error 1050: Table 'xxx' already exists
-	if strings.Contains(err.Error(), "Error 1050") {
-		return true
-	}
-
-	return false
 }

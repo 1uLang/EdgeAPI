@@ -3,6 +3,7 @@ package tasks
 import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/logs"
@@ -24,7 +25,7 @@ func init() {
 	})
 }
 
-// NodeMonitorTask 健康节点任务
+// NodeMonitorTask 边缘节点监控任务
 type NodeMonitorTask struct {
 	intervalSeconds int
 }
@@ -82,7 +83,7 @@ func (this *NodeMonitorTask) monitorCluster(cluster *models.NodeCluster) error {
 	for _, node := range inactiveNodes {
 		subject := "节点\"" + node.Name + "\"已处于离线状态"
 		msg := "节点\"" + node.Name + "\"已处于离线状态"
-		err = models.SharedMessageDAO.CreateNodeMessage(nil, clusterId, int64(node.Id), models.MessageTypeNodeInactive, models.LevelError, subject, msg, nil)
+		err = models.SharedMessageDAO.CreateNodeMessage(nil, nodeconfigs.NodeRoleNode, clusterId, int64(node.Id), models.MessageTypeNodeInactive, models.LevelError, subject, msg, nil)
 		if err != nil {
 			return err
 		}

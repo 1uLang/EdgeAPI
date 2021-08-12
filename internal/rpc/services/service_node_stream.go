@@ -9,6 +9,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/messageconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/logs"
 	"strconv"
@@ -119,7 +120,7 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 		}
 		subject := "节点\"" + nodeName + "\"已经恢复在线"
 		msg := "节点\"" + nodeName + "\"已经恢复在线"
-		err = models.SharedMessageDAO.CreateNodeMessage(tx, clusterId, nodeId, models.MessageTypeNodeActive, models.MessageLevelSuccess, subject, msg, nil)
+		err = models.SharedMessageDAO.CreateNodeMessage(tx, nodeconfigs.NodeRoleNode, clusterId, nodeId, models.MessageTypeNodeActive, models.MessageLevelSuccess, subject, msg, nil)
 		if err != nil {
 			return err
 		}
@@ -132,6 +133,12 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 		requestChanMap[nodeId] = requestChan
 	}
 	nodeLocker.Unlock()
+
+	defer func() {
+		nodeLocker.Lock()
+		delete(requestChanMap, nodeId)
+		nodeLocker.Unlock()
+	}()
 
 	// 发送请求
 	go func() {
