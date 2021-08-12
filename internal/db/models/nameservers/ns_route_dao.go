@@ -3,9 +3,14 @@ package nameservers
 import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
+	"github.com/iwind/TeaGo/types"
+	"regexp"
+	"strings"
 )
 
 const (
@@ -35,12 +40,21 @@ func init() {
 }
 
 // EnableNSRoute 启用条目
-func (this *NSRouteDAO) EnableNSRoute(tx *dbs.Tx, id int64) error {
-	_, err := this.Query(tx).
-		Pk(id).
+func (this *NSRouteDAO) EnableNSRoute(tx *dbs.Tx, routeId int64) error {
+	version, err := this.IncreaseVersion(tx)
+	if err != nil {
+		return err
+	}
+
+	_, err = this.Query(tx).
+		Pk(routeId).
 		Set("state", NSRouteStateEnabled).
+		Set("version", version).
 		Update()
-	return err
+	if err != nil {
+		return err
+	}
+	return this.NotifyUpdate(tx)
 }
 
 // DisableNSRoute 禁用条目
@@ -55,7 +69,10 @@ func (this *NSRouteDAO) DisableNSRoute(tx *dbs.Tx, routeId int64) error {
 		Set("state", NSRouteStateDisabled).
 		Set("version", version).
 		Update()
-	return err
+	if err != nil {
+		return err
+	}
+	return this.NotifyUpdate(tx)
 }
 
 // FindEnabledNSRoute 查找启用中的条目
@@ -68,6 +85,33 @@ func (this *NSRouteDAO) FindEnabledNSRoute(tx *dbs.Tx, id int64) (*NSRoute, erro
 		return nil, err
 	}
 	return result.(*NSRoute), err
+}
+
+// FindEnabledRouteWithCode 根据代号获取线路信息
+func (this *NSRouteDAO) FindEnabledRouteWithCode(tx *dbs.Tx, code string) (*NSRoute, error) {
+	if regexp.MustCompile(`^id:\d+$`).MatchString(code) {
+		var routeId = types.Int64(code[strings.Index(code, ":")+1:])
+		route, err := this.FindEnabledNSRoute(tx, routeId)
+		if route == nil || err != nil {
+			return nil, err
+		}
+
+		route.Code = "id:" + types.String(routeId)
+		return route, nil
+	}
+
+	route := dnsconfigs.FindDefaultRoute(code)
+	if route == nil {
+		return nil, nil
+	}
+
+	return &NSRoute{
+		Id:    0,
+		IsOn:  1,
+		Name:  route.Name,
+		Code:  route.Code,
+		State: NSRouteStateEnabled,
+	}, nil
 }
 
 // FindNSRouteName 根据主键查找名称
@@ -98,7 +142,17 @@ func (this *NSRouteDAO) CreateRoute(tx *dbs.Tx, clusterId int64, domainId int64,
 	op.IsOn = true
 	op.State = NSRouteStateEnabled
 	op.Version = version
-	return this.SaveInt64(tx, op)
+	routeId, err := this.SaveInt64(tx, op)
+	if err != nil {
+		return 0, err
+	}
+
+	err = this.NotifyUpdate(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	return routeId, nil
 }
 
 // UpdateRoute 修改线路
@@ -123,7 +177,12 @@ func (this *NSRouteDAO) UpdateRoute(tx *dbs.Tx, routeId int64, name string, rang
 
 	op.Version = version
 
-	return this.Save(tx, op)
+	err = this.Save(tx, op)
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx)
 }
 
 // UpdateRouteOrders 修改线路排序
@@ -145,7 +204,8 @@ func (this *NSRouteDAO) UpdateRouteOrders(tx *dbs.Tx, routeIds []int64) error {
 		}
 		order--
 	}
-	return nil
+
+	return this.NotifyUpdate(tx)
 }
 
 // FindAllEnabledRoutes 列出所有线路
@@ -189,4 +249,20 @@ func (this *NSRouteDAO) ListRoutesAfterVersion(tx *dbs.Tx, version int64, size i
 		Slice(&result).
 		FindAll()
 	return
+}
+
+// NotifyUpdate 通知更新
+func (this *NSRouteDAO) NotifyUpdate(tx *dbs.Tx) error {
+	// 线路变更时所有集群都要更新
+	clusterIds, err := models.SharedNSClusterDAO.FindAllEnabledClusterIds(tx)
+	if err != nil {
+		return err
+	}
+	for _, clusterId := range clusterIds {
+		err = models.SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleDNS, clusterId, models.NSNodeTaskTypeRouteChanged)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

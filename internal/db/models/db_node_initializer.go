@@ -22,6 +22,7 @@ var accessLogLocker = &sync.RWMutex{}
 type httpAccessLogDefinition struct {
 	Name          string
 	HasRemoteAddr bool
+	HasDomain     bool
 	Exists        bool
 }
 
@@ -82,7 +83,7 @@ func randomNSAccessLogDAO() (dao *NSAccessLogDAOWrapper) {
 }
 
 // 检查表格是否存在
-func findHTTPAccessLogTableName(db *dbs.DB, day string) (tableName string, hasRemoteAddr bool, ok bool, err error) {
+func findHTTPAccessLogTableName(db *dbs.DB, day string) (tableName string, hasRemoteAddr bool, hasDomain bool, ok bool, err error) {
 	if !regexp.MustCompile(`^\d{8}$`).MatchString(day) {
 		err = errors.New("invalid day '" + day + "', should be YYYYMMDD")
 		return
@@ -90,7 +91,7 @@ func findHTTPAccessLogTableName(db *dbs.DB, day string) (tableName string, hasRe
 
 	config, err := db.Config()
 	if err != nil {
-		return "", false, false, err
+		return "", false, false, false, err
 	}
 
 	tableName = "edgeHTTPAccessLogs_" + day
@@ -100,15 +101,15 @@ func findHTTPAccessLogTableName(db *dbs.DB, day string) (tableName string, hasRe
 	def, ok := httpAccessLogTableMapping[cacheKey]
 	accessLogLocker.RUnlock()
 	if ok {
-		return tableName, def.HasRemoteAddr, true, nil
+		return tableName, def.HasRemoteAddr, def.HasDomain, true, nil
 	}
 
 	def, err = findHTTPAccessLogTable(db, day, false)
 	if err != nil {
-		return tableName, false, false, err
+		return tableName, false, false, false, err
 	}
 
-	return tableName, def.HasRemoteAddr, def.Exists, nil
+	return tableName, def.HasRemoteAddr, def.HasDomain, def.Exists, nil
 }
 
 func findNSAccessLogTableName(db *dbs.DB, day string) (tableName string, ok bool, err error) {
@@ -174,6 +175,7 @@ func findHTTPAccessLogTable(db *dbs.DB, day string, force bool) (*httpAccessLogD
 		var definition = &httpAccessLogDefinition{
 			Name:          tableName,
 			HasRemoteAddr: table.FindFieldWithName("remoteAddr") != nil,
+			HasDomain:     table.FindFieldWithName("domain") != nil,
 			Exists:        true,
 		}
 		httpAccessLogTableMapping[cacheKey] = definition
@@ -182,11 +184,16 @@ func findHTTPAccessLogTable(db *dbs.DB, day string, force bool) (*httpAccessLogD
 	}
 
 	if !force {
-		return &httpAccessLogDefinition{Name: tableName, HasRemoteAddr: true, Exists: false}, nil
+		return &httpAccessLogDefinition{
+			Name:          tableName,
+			HasRemoteAddr: true,
+			HasDomain:     true,
+			Exists:        false,
+		}, nil
 	}
 
 	// 创建表格
-	_, err = db.Exec("CREATE TABLE `" + tableName + "` (`id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',`serverId` int(11) unsigned DEFAULT '0' COMMENT '服务ID',`nodeId` int(11) unsigned DEFAULT '0' COMMENT '节点ID',`status` int(3) unsigned DEFAULT '0' COMMENT '状态码',`createdAt` bigint(11) unsigned DEFAULT '0' COMMENT '创建时间',`content` json DEFAULT NULL COMMENT '日志内容',`requestId` varchar(128) DEFAULT NULL COMMENT '请求ID',`firewallPolicyId` int(11) unsigned DEFAULT '0' COMMENT 'WAF策略ID',`firewallRuleGroupId` int(11) unsigned DEFAULT '0' COMMENT 'WAF分组ID',`firewallRuleSetId` int(11) unsigned DEFAULT '0' COMMENT 'WAF集ID',`firewallRuleId` int(11) unsigned DEFAULT '0' COMMENT 'WAF规则ID',`remoteAddr` varchar(64) DEFAULT NULL COMMENT 'IP地址',PRIMARY KEY (`id`),KEY `serverId` (`serverId`),KEY `nodeId` (`nodeId`),KEY `serverId_status` (`serverId`,`status`),KEY `requestId` (`requestId`),KEY `firewallPolicyId` (`firewallPolicyId`),KEY `firewallRuleGroupId` (`firewallRuleGroupId`),KEY `firewallRuleSetId` (`firewallRuleSetId`),	KEY `firewallRuleId` (`firewallRuleId`),	KEY `remoteAddr` (`remoteAddr`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='访问日志';")
+	_, err = db.Exec("CREATE TABLE `" + tableName + "` (`id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',`serverId` int(11) unsigned DEFAULT '0' COMMENT '服务ID',`nodeId` int(11) unsigned DEFAULT '0' COMMENT '节点ID',`status` int(3) unsigned DEFAULT '0' COMMENT '状态码',`createdAt` bigint(11) unsigned DEFAULT '0' COMMENT '创建时间', `content` json DEFAULT NULL COMMENT '日志内容', `requestId` varchar(128) DEFAULT NULL COMMENT '请求ID', `firewallPolicyId` int(11) unsigned DEFAULT '0' COMMENT 'WAF策略ID', `firewallRuleGroupId` int(11) unsigned DEFAULT '0' COMMENT 'WAF分组ID', `firewallRuleSetId` int(11) unsigned DEFAULT '0' COMMENT 'WAF集ID', `firewallRuleId` int(11) unsigned DEFAULT '0' COMMENT 'WAF规则ID', `remoteAddr` varchar(64) DEFAULT NULL COMMENT 'IP地址', `domain` varchar(128) DEFAULT NULL COMMENT '域名', PRIMARY KEY (`id`), KEY `serverId` (`serverId`), KEY `nodeId` (`nodeId`), KEY `serverId_status` (`serverId`,`status`), KEY `requestId` (`requestId`), KEY `firewallPolicyId` (`firewallPolicyId`), KEY `firewallRuleGroupId` (`firewallRuleGroupId`), KEY `firewallRuleSetId` (`firewallRuleSetId`), KEY `firewallRuleId` (`firewallRuleId`), KEY `remoteAddr` (`remoteAddr`), KEY `domain` (`domain`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='访问日志';")
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +241,7 @@ func findNSAccessLogTable(db *dbs.DB, day string, force bool) (string, error) {
 	}
 
 	// 创建表格
-	_, err = db.Exec("CREATE TABLE `" + tableName + "` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',\n  `nodeId` int(11) unsigned DEFAULT '0' COMMENT '节点ID',\n  `domainId` int(11) unsigned DEFAULT '0' COMMENT '域名ID',\n  `recordId` int(11) unsigned DEFAULT '0' COMMENT '记录ID',\n  `content` json DEFAULT NULL COMMENT '访问数据',\n  `requestId` varchar(128) DEFAULT NULL COMMENT '请求ID',\n  `createdAt` bigint(11) unsigned DEFAULT '0' COMMENT '创建时间',\n  PRIMARY KEY (`id`),\n  KEY `nodeId` (`nodeId`),\n  KEY `domainId` (`domainId`),\n  KEY `recordId` (`recordId`),\n  KEY `requestId` (`requestId`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='域名服务访问日志';")
+	_, err = db.Exec("CREATE TABLE `" + tableName + "` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',\n  `nodeId` int(11) unsigned DEFAULT '0' COMMENT '节点ID',\n  `domainId` int(11) unsigned DEFAULT '0' COMMENT '域名ID',\n  `recordId` int(11) unsigned DEFAULT '0' COMMENT '记录ID',\n  `content` json DEFAULT NULL COMMENT '访问数据',\n  `requestId` varchar(128) DEFAULT NULL COMMENT '请求ID',\n  `createdAt` bigint(11) unsigned DEFAULT '0' COMMENT '创建时间',\n  `remoteAddr` varchar(128) DEFAULT NULL COMMENT 'IP',\n  PRIMARY KEY (`id`),\n  KEY `nodeId` (`nodeId`),\n  KEY `domainId` (`domainId`),\n  KEY `recordId` (`recordId`),\n  KEY `requestId` (`requestId`),\n  KEY `remoteAddr` (`remoteAddr`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='域名服务访问日志';")
 	if err != nil {
 		return tableName, err
 	}
@@ -346,7 +353,7 @@ func (this *DBNodeInitializer) loop() error {
 						logs.Println("[DB_NODE]create first table in database node failed: " + err.Error())
 
 						// 创建节点日志
-						createLogErr := SharedNodeLogDAO.CreateLog(nil, nodeconfigs.NodeRoleDatabase, nodeId, 0, "error", "ACCESS_LOG", "can not create access log table: "+err.Error(), time.Now().Unix())
+						createLogErr := SharedNodeLogDAO.CreateLog(nil, nodeconfigs.NodeRoleDatabase, nodeId, 0, 0, "error", "ACCESS_LOG", "can not create access log table: "+err.Error(), time.Now().Unix())
 						if createLogErr != nil {
 							logs.Println("[NODE_LOG]" + createLogErr.Error())
 						}
@@ -390,7 +397,7 @@ func (this *DBNodeInitializer) loop() error {
 						logs.Println("[DB_NODE]create first table in database node failed: " + err.Error())
 
 						// 创建节点日志
-						createLogErr := SharedNodeLogDAO.CreateLog(nil, nodeconfigs.NodeRoleDatabase, nodeId, 0, "error", "ACCESS_LOG", "can not create access log table: "+err.Error(), time.Now().Unix())
+						createLogErr := SharedNodeLogDAO.CreateLog(nil, nodeconfigs.NodeRoleDatabase, nodeId, 0, 0, "error", "ACCESS_LOG", "can not create access log table: "+err.Error(), time.Now().Unix())
 						if createLogErr != nil {
 							logs.Println("[NODE_LOG]" + createLogErr.Error())
 						}
