@@ -31,23 +31,23 @@ func (this *ACMEUserService) CreateACMEUser(ctx context.Context, req *pb.CreateA
 // 修改用户
 func (this *ACMEUserService) UpdateACMEUser(ctx context.Context, req *pb.UpdateACMEUserRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	//adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	tx := this.NullTx()
 
 	// 检查是否有权限
-	b, err := acmemodels.SharedACMEUserDAO.CheckACMEUser(tx, req.AcmeUserId, adminId, userId)
-	if err != nil {
-		return nil, err
-	}
-	if !b {
-		return nil, this.PermissionError()
-	}
+	//b, err := acmemodels.SharedACMEUserDAO.CheckACMEUser(tx, req.AcmeUserId, adminId, userId)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//if !b {
+	//	return nil, this.PermissionError()
+	//}
 
-	err = acmemodels.SharedACMEUserDAO.UpdateACMEUser(tx, req.AcmeUserId, req.Description)
+	err := acmemodels.SharedACMEUserDAO.UpdateACMEUser(tx, req.AcmeUserId, req.Description)
 	if err != nil {
 		return nil, err
 	}
@@ -57,23 +57,23 @@ func (this *ACMEUserService) UpdateACMEUser(ctx context.Context, req *pb.UpdateA
 // 删除用户
 func (this *ACMEUserService) DeleteACMEUser(ctx context.Context, req *pb.DeleteACMEUserRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	//adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	tx := this.NullTx()
 
 	// 检查是否有权限
-	b, err := acmemodels.SharedACMEUserDAO.CheckACMEUser(tx, req.AcmeUserId, adminId, userId)
-	if err != nil {
-		return nil, err
-	}
-	if !b {
-		return nil, this.PermissionError()
-	}
+	//b, err := acmemodels.SharedACMEUserDAO.CheckACMEUser(tx, req.AcmeUserId, adminId, userId)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//if !b {
+	//	return nil, this.PermissionError()
+	//}
 
-	err = acmemodels.SharedACMEUserDAO.DisableACMEUser(tx, req.AcmeUserId)
+	err := acmemodels.SharedACMEUserDAO.DisableACMEUser(tx, req.AcmeUserId)
 	if err != nil {
 		return nil, err
 	}
@@ -126,21 +126,21 @@ func (this *ACMEUserService) ListACMEUsers(ctx context.Context, req *pb.ListACME
 // 查找单个用户
 func (this *ACMEUserService) FindEnabledACMEUser(ctx context.Context, req *pb.FindEnabledACMEUserRequest) (*pb.FindEnabledACMEUserResponse, error) {
 	// 校验请求
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	//adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	tx := this.NullTx()
 
 	// 检查是否有权限
-	b, err := acmemodels.SharedACMEUserDAO.CheckACMEUser(tx, req.AcmeUserId, adminId, userId)
-	if err != nil {
-		return nil, err
-	}
-	if !b {
-		return nil, this.PermissionError()
-	}
+	//b, err := acmemodels.SharedACMEUserDAO.CheckACMEUser(tx, req.AcmeUserId, adminId, userId)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//if !b {
+	//	return nil, this.PermissionError()
+	//}
 
 	acmeUser, err := acmemodels.SharedACMEUserDAO.FindEnabledACMEUser(tx, req.AcmeUserId)
 	if err != nil {

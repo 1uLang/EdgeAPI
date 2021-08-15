@@ -28,9 +28,9 @@ func (this *BaseService) ValidateAdmin(ctx context.Context, reqAdminId int64) (a
 	if err != nil {
 		return
 	}
-	if reqAdminId > 0 && reqUserId != reqAdminId {
-		return 0, this.PermissionError()
-	}
+	//if reqAdminId > 0 && reqUserId != reqAdminId {
+	//	return 0, this.PermissionError()
+	//}
 	return reqUserId, nil
 }
 
@@ -50,20 +50,20 @@ func (this *BaseService) ValidateAdminAndUser(ctx context.Context, requireAdminI
 			err = errors.New("invalid 'adminId'")
 			return
 		}
-		if requireAdminId > 0 && adminId != requireAdminId {
-			err = this.PermissionError()
-			return
-		}
+		//if requireAdminId > 0 && adminId != requireAdminId {
+		//	err = this.PermissionError()
+		//	return
+		//}
 	case rpcutils.UserTypeUser:
 		userId = reqUserId
 		if requireUserId >= 0 && userId <= 0 {
 			err = errors.New("invalid 'userId'")
 			return
 		}
-		if requireUserId > 0 && userId != requireUserId {
-			err = this.PermissionError()
-			return
-		}
+		//if requireUserId > 0 && userId != requireUserId {
+		//	err = this.PermissionError()
+		//	return
+		//}
 	default:
 		err = errors.New("invalid user type")
 	}

@@ -190,22 +190,22 @@ func (this *ACMETaskService) CreateACMETask(ctx context.Context, req *pb.CreateA
 
 // UpdateACMETask 修改任务
 func (this *ACMETaskService) UpdateACMETask(ctx context.Context, req *pb.UpdateACMETaskRequest) (*pb.RPCSuccess, error) {
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	//adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	tx := this.NullTx()
 
-	canAccess, err := acmemodels.SharedACMETaskDAO.CheckACMETask(tx, adminId, userId, req.AcmeTaskId)
-	if err != nil {
-		return nil, err
-	}
-	if !canAccess {
-		return nil, this.PermissionError()
-	}
+	//canAccess, err := acmemodels.SharedACMETaskDAO.CheckACMETask(tx, adminId, userId, req.AcmeTaskId)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//if !canAccess {
+	//	return nil, this.PermissionError()
+	//}
 
-	err = acmemodels.SharedACMETaskDAO.UpdateACMETask(tx, req.AcmeTaskId, req.AcmeUserId, req.DnsProviderId, req.DnsDomain, req.Domains, req.AutoRenew, req.AuthURL)
+	err := acmemodels.SharedACMETaskDAO.UpdateACMETask(tx, req.AcmeTaskId, req.AcmeUserId, req.DnsProviderId, req.DnsDomain, req.Domains, req.AutoRenew, req.AuthURL)
 	if err != nil {
 		return nil, err
 	}
@@ -214,22 +214,22 @@ func (this *ACMETaskService) UpdateACMETask(ctx context.Context, req *pb.UpdateA
 
 // DeleteACMETask 删除任务
 func (this *ACMETaskService) DeleteACMETask(ctx context.Context, req *pb.DeleteACMETaskRequest) (*pb.RPCSuccess, error) {
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	//adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	tx := this.NullTx()
 
-	canAccess, err := acmemodels.SharedACMETaskDAO.CheckACMETask(tx, adminId, userId, req.AcmeTaskId)
-	if err != nil {
-		return nil, err
-	}
-	if !canAccess {
-		return nil, this.PermissionError()
-	}
+	//canAccess, err := acmemodels.SharedACMETaskDAO.CheckACMETask(tx, adminId, userId, req.AcmeTaskId)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//if !canAccess {
+	//	return nil, this.PermissionError()
+	//}
 
-	err = acmemodels.SharedACMETaskDAO.DisableACMETask(tx, req.AcmeTaskId)
+	err := acmemodels.SharedACMETaskDAO.DisableACMETask(tx, req.AcmeTaskId)
 	if err != nil {
 		return nil, err
 	}
@@ -238,20 +238,20 @@ func (this *ACMETaskService) DeleteACMETask(ctx context.Context, req *pb.DeleteA
 
 // RunACMETask 运行某个任务
 func (this *ACMETaskService) RunACMETask(ctx context.Context, req *pb.RunACMETaskRequest) (*pb.RunACMETaskResponse, error) {
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	//adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	tx := this.NullTx()
 
-	canAccess, err := acmemodels.SharedACMETaskDAO.CheckACMETask(tx, adminId, userId, req.AcmeTaskId)
-	if err != nil {
-		return nil, err
-	}
-	if !canAccess {
-		return nil, this.PermissionError()
-	}
+	//canAccess, err := acmemodels.SharedACMETaskDAO.CheckACMETask(tx, adminId, userId, req.AcmeTaskId)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//if !canAccess {
+	//	return nil, this.PermissionError()
+	//}
 
 	isOk, msg, certId := acmemodels.SharedACMETaskDAO.RunTask(tx, req.AcmeTaskId)
 
@@ -264,20 +264,20 @@ func (this *ACMETaskService) RunACMETask(ctx context.Context, req *pb.RunACMETas
 
 // FindEnabledACMETask 查找单个任务信息
 func (this *ACMETaskService) FindEnabledACMETask(ctx context.Context, req *pb.FindEnabledACMETaskRequest) (*pb.FindEnabledACMETaskResponse, error) {
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	//adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	tx := this.NullTx()
 
-	canAccess, err := acmemodels.SharedACMETaskDAO.CheckACMETask(tx, adminId, userId, req.AcmeTaskId)
-	if err != nil {
-		return nil, err
-	}
-	if !canAccess {
-		return nil, this.PermissionError()
-	}
+	//canAccess, err := acmemodels.SharedACMETaskDAO.CheckACMETask(tx, adminId, userId, req.AcmeTaskId)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//if !canAccess {
+	//	return nil, this.PermissionError()
+	//}
 
 	task, err := acmemodels.SharedACMETaskDAO.FindEnabledACMETask(tx, req.AcmeTaskId)
 	if err != nil {
