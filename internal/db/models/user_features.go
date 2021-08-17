@@ -181,6 +181,11 @@ var (
 			Description: "用户可以新增、删除子账号以及配置其权限",
 		},
 		{
+			Name:        "创建子账号",
+			Code:        "platform.userCreate",
+			Description: "用户可以新增子账号",
+		},
+		{
 			Name:        "操作日志",
 			Code:        "platform.logs",
 			Description: "用户可以查看用户及其子账号的操作日志",
