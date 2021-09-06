@@ -20,20 +20,30 @@ var (
 			Code:        "waf.waf",
 			Description: "用户可以查看安全概览统计数据",
 		},
+		//{
+		//	Name:        "拦截日志",
+		//	Code:        "waf.wafLogs",
+		//	Description: "用户可以查看用户平台拦截日志",
+		//},
 		{
-			Name:        "拦截日志",
-			Code:        "waf.wafLogs",
-			Description: "用户可以查看用户平台拦截日志",
-		},
-		{
-			Name:        "DDoS攻击",
+			Name:        "DDoS日志",
 			Code:        "waf.ddos",
 			Description: "用户可以查看平台检测到的DDoS攻击记录",
 		},
 		{
-			Name:        "安全监控",
+			Name:        "IPS日志",
 			Code:        "waf.alarm",
 			Description: "用户可以查看云防火墙的安全监控记录",
+		},
+		{
+			Name:        "APT日志",
+			Code:        "waf.apt",
+			Description: "用户可以查看恶意流量IP",
+		},
+		{
+			Name:        "WAF日志",
+			Code:        "waf.logs",
+			Description: "用户可以查看waf日志",
 		},
 		{
 			Name:        "DDoS防护",
@@ -84,11 +94,11 @@ var (
 			Code:        "servers.servers",
 			Description: "用户可以新增、管理、删除域名",
 		},
-		{
-			Name:        "证书管理",
-			Code:        "servers.certs",
-			Description: "用户可以上传各类的证书",
-		},
+		//{
+		//	Name:        "证书管理",
+		//	Code:        "servers.certs",
+		//	Description: "用户可以上传各类的证书",
+		//},
 		{
 			Name:        "刷新预热",
 			Code:        "servers.cache",
@@ -138,6 +148,11 @@ var (
 			Name:        "Agent管理",
 			Code:        "hids.agent",
 			Description: "用户可以安装、添加agent主机功能",
+		},
+		{
+			Name:        "黑白名单",
+			Code:        "hids.bwlist",
+			Description: "用户可以查看黑白名单",
 		},
 		{
 			Name:        "漏洞扫描",
