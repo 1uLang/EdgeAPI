@@ -150,6 +150,11 @@ var (
 			Description: "用户可以安装、添加agent主机功能",
 		},
 		{
+			Name:        "黑白名单",
+			Code:        "hids.bwlist",
+			Description: "用户可以查看黑白名单",
+		},
+		{
 			Name:        "主机防护",
 			Code:        "nhids",
 			Description: "开启主机防护(新)组件功能",
@@ -183,11 +188,6 @@ var (
 			Name:        "文件监控",
 			Code:        "nhids.syscheck",
 			Description: "用户可以查看主机文件列表以及文件监控记录",
-		},
-		{
-			Name:        "黑白名单",
-			Code:        "hids.bwlist",
-			Description: "用户可以查看黑白名单",
 		},
 		{
 			Name:        "漏洞扫描",
