@@ -496,6 +496,9 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		this.rest(instance)
 	}
 
+	//plus
+	APIAuthorityKeyServicesRegister(this,server)
+
 	//APINodeServicesRegister(this, server)
 
 	// TODO check service names
