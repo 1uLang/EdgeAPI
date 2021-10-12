@@ -11,6 +11,7 @@ type ProviderType = string
 const (
 	ProviderTypeDNSPod       ProviderType = "dnspod"       // DNSPod
 	ProviderTypeAliDNS       ProviderType = "alidns"       // 阿里云DNS
+	ProviderTypeHuaweiDNS    ProviderType = "huaweiDNS"    // 华为DNS
 	ProviderTypeDNSCom       ProviderType = "dnscom"       // dns.com
 	ProviderTypeCloudFlare   ProviderType = "cloudFlare"   // CloudFlare DNS
 	ProviderTypeLocalEdgeDNS ProviderType = "localEdgeDNS" // 和当前系统集成的EdgeDNS
@@ -31,6 +32,11 @@ func FindAllProviderTypes() []maps.Map {
 			"code":        ProviderTypeDNSPod,
 			"description": "DNSPod提供的DNS服务。",
 		},
+		{
+			"name":        "华为云DNS",
+			"code":        ProviderTypeHuaweiDNS,
+			"description": "华为云解析DNS。",
+		},
 		/**{
 			"name": "帝恩思DNS.COM",
 			"code": ProviderTypeDNSCom,
@@ -46,9 +52,9 @@ func FindAllProviderTypes() []maps.Map {
 	if teaconst.IsPlus {
 		typeMaps = append(typeMaps, []maps.Map{
 			{
-				"name":        "集成EdgeDNS",
+				"name":        "自建EdgeDNS",
 				"code":        ProviderTypeLocalEdgeDNS,
-				"description": "当前企业版提供的DNS服务。",
+				"description": "当前企业版提供的自建DNS服务。",
 			},
 			// TODO 需要实现用户使用AccessId/AccessKey来连接DNS服务
 			/**{
@@ -74,6 +80,8 @@ func FindProvider(providerType ProviderType) ProviderInterface {
 		return &DNSPodProvider{}
 	case ProviderTypeAliDNS:
 		return &AliDNSProvider{}
+	case ProviderTypeHuaweiDNS:
+		return &HuaweiDNSProvider{}
 	case ProviderTypeCloudFlare:
 		return &CloudFlareProvider{}
 	case ProviderTypeLocalEdgeDNS:

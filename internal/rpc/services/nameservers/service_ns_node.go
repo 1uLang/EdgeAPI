@@ -5,13 +5,15 @@ package nameservers
 import (
 	"context"
 	"encoding/json"
-	"github.com/TeaOSLab/EdgeAPI/internal/db/models/nameservers"
+	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/installers"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/iwind/TeaGo/logs"
 	stringutil "github.com/iwind/TeaGo/utils/string"
 	"path/filepath"
 )
@@ -30,7 +32,7 @@ func (this *NSNodeService) FindAllEnabledNSNodesWithNSClusterId(ctx context.Cont
 
 	var tx = this.NullTx()
 
-	nodes, err := nameservers.SharedNSNodeDAO.FindAllEnabledNodesWithClusterId(tx, req.NsClusterId)
+	nodes, err := models.SharedNSNodeDAO.FindAllEnabledNodesWithClusterId(tx, req.NsClusterId)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +62,7 @@ func (this *NSNodeService) CountAllEnabledNSNodes(ctx context.Context, req *pb.C
 	}
 
 	var tx = this.NullTx()
-	count, err := nameservers.SharedNSNodeDAO.CountAllEnabledNodes(tx)
+	count, err := models.SharedNSNodeDAO.CountAllEnabledNodes(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +77,7 @@ func (this *NSNodeService) CountAllEnabledNSNodesMatch(ctx context.Context, req 
 	}
 
 	var tx = this.NullTx()
-	count, err := nameservers.SharedNSNodeDAO.CountAllEnabledNodesMatch(tx, req.NsClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword)
+	count, err := models.SharedNSNodeDAO.CountAllEnabledNodesMatch(tx, req.NsClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +92,10 @@ func (this *NSNodeService) ListEnabledNSNodesMatch(ctx context.Context, req *pb.
 	}
 
 	var tx = this.NullTx()
-	nodes, err := nameservers.SharedNSNodeDAO.ListAllEnabledNodesMatch(tx, req.NsClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword, req.Offset, req.Size)
+	nodes, err := models.SharedNSNodeDAO.ListAllEnabledNodesMatch(tx, req.NsClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword, req.Offset, req.Size)
+	if err != nil {
+		return nil, err
+	}
 	pbNodes := []*pb.NSNode{}
 	for _, node := range nodes {
 		// 安装信息
@@ -116,6 +121,7 @@ func (this *NSNodeService) ListEnabledNSNodesMatch(ctx context.Context, req *pb.
 			IsOn:          node.IsOn == 1,
 			UniqueId:      node.UniqueId,
 			Secret:        node.Secret,
+			IsActive:      node.IsActive == 1,
 			IsInstalled:   node.IsInstalled == 1,
 			InstallDir:    node.InstallDir,
 			IsUp:          node.IsUp == 1,
@@ -140,7 +146,7 @@ func (this *NSNodeService) CountAllUpgradeNSNodesWithNSClusterId(ctx context.Con
 	deployFiles := installers.SharedDeployManager.LoadNSNodeFiles()
 	total := int64(0)
 	for _, deployFile := range deployFiles {
-		count, err := nameservers.SharedNSNodeDAO.CountAllLowerVersionNodesWithClusterId(tx, req.NsClusterId, deployFile.OS, deployFile.Arch, deployFile.Version)
+		count, err := models.SharedNSNodeDAO.CountAllLowerVersionNodesWithClusterId(tx, req.NsClusterId, deployFile.OS, deployFile.Arch, deployFile.Version)
 		if err != nil {
 			return nil, err
 		}
@@ -159,9 +165,17 @@ func (this *NSNodeService) CreateNSNode(ctx context.Context, req *pb.CreateNSNod
 
 	tx := this.NullTx()
 
-	nodeId, err := nameservers.SharedNSNodeDAO.CreateNode(tx, adminId, req.Name, req.NodeClusterId)
+	nodeId, err := models.SharedNSNodeDAO.CreateNode(tx, adminId, req.Name, req.NodeClusterId)
 	if err != nil {
 		return nil, err
+	}
+
+	// 增加认证相关
+	if req.NodeLogin != nil {
+		_, err = models.SharedNodeLoginDAO.CreateNodeLogin(tx, nodeconfigs.NodeRoleDNS, nodeId, req.NodeLogin.Name, req.NodeLogin.Type, req.NodeLogin.Params)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &pb.CreateNSNodeResponse{
@@ -178,7 +192,13 @@ func (this *NSNodeService) DeleteNSNode(ctx context.Context, req *pb.DeleteNSNod
 
 	tx := this.NullTx()
 
-	err = nameservers.SharedNSNodeDAO.DisableNSNode(tx, req.NsNodeId)
+	err = models.SharedNSNodeDAO.DisableNSNode(tx, req.NsNodeId)
+	if err != nil {
+		return nil, err
+	}
+
+	// 删除任务
+	err = models.SharedNodeTaskDAO.DeleteNodeTasks(tx, nodeconfigs.NodeRoleDNS, req.NsNodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +215,7 @@ func (this *NSNodeService) FindEnabledNSNode(ctx context.Context, req *pb.FindEn
 
 	tx := this.NullTx()
 
-	node, err := nameservers.SharedNSNodeDAO.FindEnabledNSNode(tx, req.NsNodeId)
+	node, err := models.SharedNSNodeDAO.FindEnabledNSNode(tx, req.NsNodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -204,9 +224,24 @@ func (this *NSNodeService) FindEnabledNSNode(ctx context.Context, req *pb.FindEn
 	}
 
 	// 集群信息
-	clusterName, err := nameservers.SharedNSClusterDAO.FindEnabledNSClusterName(tx, int64(node.ClusterId))
+	clusterName, err := models.SharedNSClusterDAO.FindEnabledNSClusterName(tx, int64(node.ClusterId))
 	if err != nil {
 		return nil, err
+	}
+
+	// 认证信息
+	login, err := models.SharedNodeLoginDAO.FindEnabledNodeLoginWithNodeId(tx, nodeconfigs.NodeRoleDNS, req.NsNodeId)
+	if err != nil {
+		return nil, err
+	}
+	var respLogin *pb.NodeLogin = nil
+	if login != nil {
+		respLogin = &pb.NodeLogin{
+			Id:     int64(login.Id),
+			Name:   login.Name,
+			Type:   login.Type,
+			Params: []byte(login.Params),
+		}
 	}
 
 	// 安装信息
@@ -240,6 +275,7 @@ func (this *NSNodeService) FindEnabledNSNode(ctx context.Context, req *pb.FindEn
 		},
 		InstallStatus: installStatusResult,
 		IsOn:          node.IsOn == 1,
+		NodeLogin:     respLogin,
 	}}, nil
 }
 
@@ -252,9 +288,29 @@ func (this *NSNodeService) UpdateNSNode(ctx context.Context, req *pb.UpdateNSNod
 
 	tx := this.NullTx()
 
-	err = nameservers.SharedNSNodeDAO.UpdateNode(tx, req.NsNodeId, req.Name, req.NsClusterId, req.IsOn)
+	err = models.SharedNSNodeDAO.UpdateNode(tx, req.NsNodeId, req.Name, req.NsClusterId, req.IsOn)
 	if err != nil {
 		return nil, err
+	}
+
+	// 登录信息
+	if req.NodeLogin == nil {
+		err = models.SharedNodeLoginDAO.DisableNodeLogins(tx, nodeconfigs.NodeRoleDNS, req.NsNodeId)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if req.NodeLogin.Id > 0 {
+			err = models.SharedNodeLoginDAO.UpdateNodeLogin(tx, req.NodeLogin.Id, req.NodeLogin.Name, req.NodeLogin.Type, req.NodeLogin.Params)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			_, err = models.SharedNodeLoginDAO.CreateNodeLogin(tx, nodeconfigs.NodeRoleDNS, req.NsNodeId, req.NodeLogin.Name, req.NodeLogin.Type, req.NodeLogin.Params)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return this.Success()
@@ -267,8 +323,12 @@ func (this *NSNodeService) InstallNSNode(ctx context.Context, req *pb.InstallNSN
 		return nil, err
 	}
 
-	// TODO 需要实现
-	return nil, errors.New("尚未实现此功能")
+	go func() {
+		err = installers.SharedNSNodeQueue().InstallNodeProcess(req.NsNodeId, false)
+		if err != nil {
+			logs.Println("[RPC]install dns node:" + err.Error())
+		}
+	}()
 
 	return &pb.InstallNSNodeResponse{}, nil
 }
@@ -283,7 +343,7 @@ func (this *NSNodeService) FindNSNodeInstallStatus(ctx context.Context, req *pb.
 
 	tx := this.NullTx()
 
-	installStatus, err := nameservers.SharedNSNodeDAO.FindNodeInstallStatus(tx, req.NsNodeId)
+	installStatus, err := models.SharedNSNodeDAO.FindNodeInstallStatus(tx, req.NsNodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +371,7 @@ func (this *NSNodeService) UpdateNSNodeIsInstalled(ctx context.Context, req *pb.
 
 	tx := this.NullTx()
 
-	err = nameservers.SharedNSNodeDAO.UpdateNodeIsInstalled(tx, req.NsNodeId, req.IsInstalled)
+	err = models.SharedNSNodeDAO.UpdateNodeIsInstalled(tx, req.NsNodeId, req.IsInstalled)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +397,7 @@ func (this *NSNodeService) UpdateNSNodeStatus(ctx context.Context, req *pb.Updat
 
 	tx := this.NullTx()
 
-	err = nameservers.SharedNSNodeDAO.UpdateNodeStatus(tx, nodeId, req.StatusJSON)
+	err = models.SharedNSNodeDAO.UpdateNodeStatus(tx, nodeId, req.StatusJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +413,7 @@ func (this *NSNodeService) FindCurrentNSNodeConfig(ctx context.Context, req *pb.
 	}
 
 	var tx = this.NullTx()
-	config, err := nameservers.SharedNSNodeDAO.ComposeNodeConfig(tx, nodeId)
+	config, err := models.SharedNSNodeDAO.ComposeNodeConfig(tx, nodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -405,6 +465,9 @@ func (this *NSNodeService) DownloadNSNodeInstallationFile(ctx context.Context, r
 	}
 
 	data, offset, err := file.Read(req.ChunkOffset)
+	if err != nil {
+		return nil, err
+	}
 
 	return &pb.DownloadNSNodeInstallationFileResponse{
 		Sum:       sum,
@@ -413,4 +476,44 @@ func (this *NSNodeService) DownloadNSNodeInstallationFile(ctx context.Context, r
 		Version:   file.Version,
 		Filename:  filepath.Base(file.Path),
 	}, nil
+}
+
+// UpdateNSNodeConnectedAPINodes 更改节点连接的API节点信息
+func (this *NSNodeService) UpdateNSNodeConnectedAPINodes(ctx context.Context, req *pb.UpdateNSNodeConnectedAPINodesRequest) (*pb.RPCSuccess, error) {
+	// 校验节点
+	_, _, nodeId, err := rpcutils.ValidateRequest(ctx, rpcutils.UserTypeDNS)
+	if err != nil {
+		return nil, err
+	}
+
+	tx := this.NullTx()
+
+	err = models.SharedNSNodeDAO.UpdateNodeConnectedAPINodes(tx, nodeId, req.ApiNodeIds)
+	if err != nil {
+		return nil, errors.Wrap(err)
+	}
+
+	return this.Success()
+}
+
+// UpdateNSNodeLogin 修改节点登录信息
+func (this *NSNodeService) UpdateNSNodeLogin(ctx context.Context, req *pb.UpdateNSNodeLoginRequest) (*pb.RPCSuccess, error) {
+	// 校验请求
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	tx := this.NullTx()
+
+	if req.NodeLogin.Id <= 0 {
+		_, err := models.SharedNodeLoginDAO.CreateNodeLogin(tx, nodeconfigs.NodeRoleDNS, req.NsNodeId, req.NodeLogin.Name, req.NodeLogin.Type, req.NodeLogin.Params)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = models.SharedNodeLoginDAO.UpdateNodeLogin(tx, req.NodeLogin.Id, req.NodeLogin.Name, req.NodeLogin.Type, req.NodeLogin.Params)
+
+	return this.Success()
 }

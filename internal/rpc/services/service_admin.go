@@ -6,7 +6,6 @@ import (
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/authority"
-	"github.com/TeaOSLab/EdgeAPI/internal/db/models/nameservers"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/stats"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
@@ -637,7 +636,7 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		upgradeInfo := &pb.ComposeAdminDashboardResponse_UpgradeInfo{
 			NewVersion: teaconst.DNSNodeVersion,
 		}
-		countNodes, err := nameservers.SharedNSNodeDAO.CountAllLowerVersionNodes(tx, upgradeInfo.NewVersion)
+		countNodes, err := models.SharedNSNodeDAO.CountAllLowerVersionNodes(tx, upgradeInfo.NewVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -751,7 +750,7 @@ func (this *AdminService) findMetricDataCharts(tx *dbs.Tx) (result []*pb.MetricD
 			var pbStats = []*pb.MetricStat{}
 			switch chart.Type {
 			case serverconfigs.MetricChartTypeTimeLine:
-				itemStats, err := models.SharedMetricStatDAO.FindLatestItemStats(tx, itemId, types.Int32(item.Version), 10)
+				itemStats, err := models.SharedMetricStatDAO.FindLatestItemStats(tx, itemId, chart.IgnoreEmptyKeys == 1, chart.DecodeIgnoredKeys(), types.Int32(item.Version), 10)
 				if err != nil {
 					return nil, err
 				}
@@ -780,7 +779,7 @@ func (this *AdminService) findMetricDataCharts(tx *dbs.Tx) (result []*pb.MetricD
 					})
 				}
 			default:
-				itemStats, err := models.SharedMetricStatDAO.FindItemStatsAtLastTime(tx, itemId, types.Int32(item.Version), 10)
+				itemStats, err := models.SharedMetricStatDAO.FindItemStatsAtLastTime(tx, itemId, chart.IgnoreEmptyKeys == 1, chart.DecodeIgnoredKeys(), types.Int32(item.Version), 10)
 				if err != nil {
 					return nil, err
 				}

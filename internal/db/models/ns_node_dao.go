@@ -1,13 +1,13 @@
-package nameservers
+package models
 
 import (
 	"encoding/json"
-	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -133,9 +133,9 @@ func (this *NSNodeDAO) CountAllEnabledNodesMatch(tx *dbs.Tx, clusterId int64, in
 	case configutils.BoolStateAll:
 		// 所有
 	case configutils.BoolStateYes:
-		query.Where("JSON_EXTRACT(status, '$.isActive') AND UNIX_TIMESTAMP()-JSON_EXTRACT(status, '$.updatedAt')<=60")
+		query.Where("(isActive=1 AND JSON_EXTRACT(status, '$.isActive') AND UNIX_TIMESTAMP()-JSON_EXTRACT(status, '$.updatedAt')<=60)")
 	case configutils.BoolStateNo:
-		query.Where("(status IS NULL OR NOT JSON_EXTRACT(status, '$.isActive') OR UNIX_TIMESTAMP()-JSON_EXTRACT(status, '$.updatedAt')>60)")
+		query.Where("(isActive=0 OR status IS NULL OR NOT JSON_EXTRACT(status, '$.isActive') OR UNIX_TIMESTAMP()-JSON_EXTRACT(status, '$.updatedAt')>60)")
 	}
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword)").
@@ -166,9 +166,9 @@ func (this *NSNodeDAO) ListAllEnabledNodesMatch(tx *dbs.Tx, clusterId int64, ins
 	case configutils.BoolStateAll:
 		// 所有
 	case configutils.BoolStateYes:
-		query.Where("JSON_EXTRACT(status, '$.isActive') AND UNIX_TIMESTAMP()-JSON_EXTRACT(status, '$.updatedAt')<=60")
+		query.Where("(isActive=1 AND JSON_EXTRACT(status, '$.isActive') AND UNIX_TIMESTAMP()-JSON_EXTRACT(status, '$.updatedAt')<=60)")
 	case configutils.BoolStateNo:
-		query.Where("(status IS NULL OR NOT JSON_EXTRACT(status, '$.isActive') OR UNIX_TIMESTAMP()-JSON_EXTRACT(status, '$.updatedAt')>60)")
+		query.Where("(isActive=0 OR status IS NULL OR NOT JSON_EXTRACT(status, '$.isActive') OR UNIX_TIMESTAMP()-JSON_EXTRACT(status, '$.updatedAt')>60)")
 	}
 
 	if clusterId > 0 {
@@ -213,7 +213,7 @@ func (this *NSNodeDAO) CreateNode(tx *dbs.Tx, adminId int64, name string, cluste
 	secret := rands.String(32)
 
 	// 保存API Token
-	err = models.SharedApiTokenDAO.CreateAPIToken(tx, uniqueId, secret, nodeconfigs.NodeRoleDNS)
+	err = SharedApiTokenDAO.CreateAPIToken(tx, uniqueId, secret, nodeconfigs.NodeRoleDNS)
 	if err != nil {
 		return
 	}
@@ -280,7 +280,7 @@ func (this *NSNodeDAO) FindEnabledNodeIdWithUniqueId(tx *dbs.Tx, uniqueId string
 }
 
 // FindNodeInstallStatus 查询节点的安装状态
-func (this *NSNodeDAO) FindNodeInstallStatus(tx *dbs.Tx, nodeId int64) (*models.NodeInstallStatus, error) {
+func (this *NSNodeDAO) FindNodeInstallStatus(tx *dbs.Tx, nodeId int64) (*NodeInstallStatus, error) {
 	node, err := this.Query(tx).
 		Pk(nodeId).
 		Result("installStatus", "isInstalled").
@@ -295,10 +295,10 @@ func (this *NSNodeDAO) FindNodeInstallStatus(tx *dbs.Tx, nodeId int64) (*models.
 	installStatus := node.(*NSNode).InstallStatus
 	isInstalled := node.(*NSNode).IsInstalled == 1
 	if len(installStatus) == 0 {
-		return models.NewNodeInstallStatus(), nil
+		return NewNodeInstallStatus(), nil
 	}
 
-	status := &models.NodeInstallStatus{}
+	status := &NodeInstallStatus{}
 	err = json.Unmarshal([]byte(installStatus), status)
 	if err != nil {
 		return nil, err
@@ -384,16 +384,37 @@ func (this *NSNodeDAO) ComposeNodeConfig(tx *dbs.Tx, nodeId int64) (*dnsconfigs.
 	config := &dnsconfigs.NSNodeConfig{
 		Id:        int64(node.Id),
 		NodeId:    node.UniqueId,
+		Secret:    node.Secret,
 		ClusterId: int64(node.ClusterId),
 	}
 
-	if len(cluster.AccessLog) > 0 {
-		ref := &dnsconfigs.AccessLogRef{}
-		err = json.Unmarshal([]byte(cluster.AccessLog), ref)
+	// 访问日志
+	// 全局配置
+	{
+		globalValue, err := SharedSysSettingDAO.ReadSetting(tx, systemconfigs.SettingCodeNSAccessLogSetting)
 		if err != nil {
 			return nil, err
 		}
-		config.AccessLogRef = ref
+		if len(globalValue) > 0 {
+			var ref = &dnsconfigs.NSAccessLogRef{}
+			err = json.Unmarshal(globalValue, ref)
+			if err != nil {
+				return nil, err
+			}
+			config.AccessLogRef = ref
+		}
+
+		// 集群配置
+		if len(cluster.AccessLog) > 0 {
+			ref := &dnsconfigs.NSAccessLogRef{}
+			err = json.Unmarshal([]byte(cluster.AccessLog), ref)
+			if err != nil {
+				return nil, err
+			}
+			if ref.IsPrior {
+				config.AccessLogRef = ref
+			}
+		}
 	}
 
 	return config, nil
@@ -405,6 +426,120 @@ func (this *NSNodeDAO) FindNodeClusterId(tx *dbs.Tx, nodeId int64) (int64, error
 		Pk(nodeId).
 		Result("clusterId").
 		FindInt64Col(0)
+}
+
+// FindNodeActive 检查节点活跃状态
+func (this *NSNodeDAO) FindNodeActive(tx *dbs.Tx, nodeId int64) (bool, error) {
+	isActive, err := this.Query(tx).
+		Pk(nodeId).
+		Result("isActive").
+		FindIntCol(0)
+	if err != nil {
+		return false, err
+	}
+	return isActive == 1, nil
+}
+
+// UpdateNodeActive 修改节点活跃状态
+func (this *NSNodeDAO) UpdateNodeActive(tx *dbs.Tx, nodeId int64, isActive bool) error {
+	if nodeId <= 0 {
+		return errors.New("invalid nodeId")
+	}
+	_, err := this.Query(tx).
+		Pk(nodeId).
+		Set("isActive", isActive).
+		Set("statusIsNotified", false).
+		Update()
+	return err
+}
+
+// UpdateNodeConnectedAPINodes 修改当前连接的API节点
+func (this *NSNodeDAO) UpdateNodeConnectedAPINodes(tx *dbs.Tx, nodeId int64, apiNodeIds []int64) error {
+	if nodeId <= 0 {
+		return errors.New("invalid nodeId")
+	}
+
+	op := NewNSNodeOperator()
+	op.Id = nodeId
+
+	if len(apiNodeIds) > 0 {
+		apiNodeIdsJSON, err := json.Marshal(apiNodeIds)
+		if err != nil {
+			return errors.Wrap(err)
+		}
+		op.ConnectedAPINodes = apiNodeIdsJSON
+	} else {
+		op.ConnectedAPINodes = "[]"
+	}
+	err := this.Save(tx, op)
+	return err
+}
+
+// FindAllNotifyingInactiveNodesWithClusterId 取得某个集群所有等待通知离线离线的节点
+func (this *NSNodeDAO) FindAllNotifyingInactiveNodesWithClusterId(tx *dbs.Tx, clusterId int64) (result []*NSNode, err error) {
+	_, err = this.Query(tx).
+		State(NSNodeStateEnabled).
+		Attr("clusterId", clusterId).
+		Attr("isOn", true).        // 只监控启用的节点
+		Attr("isInstalled", true). // 只监控已经安装的节点
+		Attr("isActive", false).   // 当前已经离线的
+		Attr("statusIsNotified", false).
+		Result("id", "name").
+		Slice(&result).
+		FindAll()
+	return
+}
+
+// UpdateNodeStatusIsNotified 设置状态已经通知
+func (this *NSNodeDAO) UpdateNodeStatusIsNotified(tx *dbs.Tx, nodeId int64) error {
+	return this.Query(tx).
+		Pk(nodeId).
+		Set("statusIsNotified", true).
+		UpdateQuickly()
+}
+
+// FindAllNodeIdsMatch 匹配节点并返回节点ID
+func (this *NSNodeDAO) FindAllNodeIdsMatch(tx *dbs.Tx, clusterId int64, includeSecondaryNodes bool, isOn configutils.BoolState) (result []int64, err error) {
+	query := this.Query(tx)
+	query.State(NSNodeStateEnabled)
+	if clusterId > 0 {
+		query.Attr("clusterId", clusterId)
+	}
+	if isOn == configutils.BoolStateYes {
+		query.Attr("isOn", true)
+	} else if isOn == configutils.BoolStateNo {
+		query.Attr("isOn", false)
+	}
+	query.Result("id")
+	ones, _, err := query.FindOnes()
+	if err != nil {
+		return nil, err
+	}
+	for _, one := range ones {
+		result = append(result, one.GetInt64("id"))
+	}
+	return
+}
+
+// UpdateNodeInstallStatus 修改节点的安装状态
+func (this *NSNodeDAO) UpdateNodeInstallStatus(tx *dbs.Tx, nodeId int64, status *NodeInstallStatus) error {
+	if status == nil {
+		_, err := this.Query(tx).
+			Pk(nodeId).
+			Set("installStatus", "null").
+			Update()
+		return err
+	}
+
+	data, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	_, err = this.Query(tx).
+		Pk(nodeId).
+		Set("installStatus", string(data)).
+		Update()
+	return err
 }
 
 // NotifyUpdate 通知更新
