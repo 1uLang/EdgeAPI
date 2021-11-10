@@ -37,10 +37,10 @@ func (this *UserService) CreateUser(ctx context.Context, req *pb.CreateUserReque
 
 // UpdateUser 修改用户
 func (this *UserService) UpdateUser(ctx context.Context, req *pb.UpdateUserRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
-	if err != nil {
-		return nil, err
-	}
+	//_, err := this.ValidateAdmin(ctx, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	tx := this.NullTx()
 
