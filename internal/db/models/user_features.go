@@ -121,7 +121,7 @@ var (
 		},
 		{
 			Name:        "自定义负载均衡端口",
-			Code:        "lb-tcp-port",
+			Code:        "lb-tcp.lb-tcp-port",
 			Description: "用户可以自定义TCP端口",
 		},
 		{
