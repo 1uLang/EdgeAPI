@@ -111,7 +111,7 @@ var (
 		},
 		{
 			Name:        "证书服务",
-			Code:        "certs",
+			Code:        "servers.certs",
 			Description: "用户可以开启证书服务功能",
 		},
 		{
