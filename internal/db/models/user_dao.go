@@ -127,7 +127,9 @@ func (this *UserDAO) UpdateUser(tx *dbs.Tx, userId int64, username string, passw
 	op.Tel = tel
 	op.Email = email
 	op.Remark = remark
-	op.ClusterId = nodeClusterId
+	if nodeClusterId != 0 {
+		op.ClusterId = nodeClusterId
+	}
 	op.IsOn = isOn
 	err := this.Save(tx, op)
 	return err

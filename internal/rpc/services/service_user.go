@@ -54,7 +54,7 @@ func (this *UserService) UpdateUser(ctx context.Context, req *pb.UpdateUserReque
 		return nil, err
 	}
 
-	if oldClusterId != req.NodeClusterId {
+	if oldClusterId != req.NodeClusterId && req.NodeClusterId != 0 {
 		err = models.SharedServerDAO.UpdateUserServersClusterId(tx, req.UserId, oldClusterId, req.NodeClusterId)
 		if err != nil {
 			return nil, err
@@ -156,10 +156,10 @@ func (this *UserService) ListEnabledUsers(ctx context.Context, req *pb.ListEnabl
 
 // FindEnabledUser 查询单个用户信息
 func (this *UserService) FindEnabledUser(ctx context.Context, req *pb.FindEnabledUserRequest) (*pb.FindEnabledUserResponse, error) {
-	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	//_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	tx := this.NullTx()
 
