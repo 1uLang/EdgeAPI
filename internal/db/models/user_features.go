@@ -230,6 +230,11 @@ var (
 			Description: "用户可以创建授权登录资产的授权凭证",
 		},
 		{
+			Name:        "接入网关",
+			Code:        "fortcloud.gateway",
+			Description: "用户配置跳板机，访问网域内主机",
+		},
+		{
 			Name:        "会话管理",
 			Code:        "fortcloud.sessions",
 			Description: "用户可以主动断开或监控资产连接在线会话",
@@ -238,11 +243,6 @@ var (
 			Name:        "运维审计",
 			Code:        "fortcloud.audit",
 			Description: "用户可以回放资产连接历史会话",
-		},
-		{
-			Name:        "接入网关",
-			Code:        "fortcloud.gateway",
-			Description: "用户配置跳板机，访问网域内主机",
 		},
 		{
 			Name:        "安全审计",
