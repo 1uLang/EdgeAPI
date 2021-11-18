@@ -240,6 +240,11 @@ var (
 			Description: "用户可以回放资产连接历史会话",
 		},
 		{
+			Name:        "接入网关",
+			Code:        "fortcloud.gateway",
+			Description: "用户配置跳板机，访问网域内主机",
+		},
+		{
 			Name:        "安全审计",
 			Code:        "audit",
 			Description: "开启安全审计组件功能",
