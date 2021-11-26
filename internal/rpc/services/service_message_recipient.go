@@ -3,15 +3,16 @@ package services
 import (
 	"context"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
-// 消息接收人服务
+// MessageRecipientService 消息接收人服务
 type MessageRecipientService struct {
 	BaseService
 }
 
-// 创建接收人
+// CreateMessageRecipient 创建接收人
 func (this *MessageRecipientService) CreateMessageRecipient(ctx context.Context, req *pb.CreateMessageRecipientRequest) (*pb.CreateMessageRecipientResponse, error) {
 	_, err := this.ValidateAdmin(ctx, 0)
 	if err != nil {
@@ -19,7 +20,7 @@ func (this *MessageRecipientService) CreateMessageRecipient(ctx context.Context,
 	}
 
 	var tx = this.NullTx()
-	recipientId, err := models.SharedMessageRecipientDAO.CreateRecipient(tx, req.AdminId, req.MessageMediaInstanceId, req.User, req.MessageRecipientGroupIds, req.Description)
+	recipientId, err := models.SharedMessageRecipientDAO.CreateRecipient(tx, req.AdminId, req.MessageMediaInstanceId, req.User, req.MessageRecipientGroupIds, req.Description, req.TimeFrom, req.TimeTo)
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +28,7 @@ func (this *MessageRecipientService) CreateMessageRecipient(ctx context.Context,
 	return &pb.CreateMessageRecipientResponse{MessageRecipientId: recipientId}, nil
 }
 
-// 修改接收人
+// UpdateMessageRecipient 修改接收人
 func (this *MessageRecipientService) UpdateMessageRecipient(ctx context.Context, req *pb.UpdateMessageRecipientRequest) (*pb.RPCSuccess, error) {
 	_, err := this.ValidateAdmin(ctx, 0)
 	if err != nil {
@@ -35,7 +36,7 @@ func (this *MessageRecipientService) UpdateMessageRecipient(ctx context.Context,
 	}
 
 	var tx = this.NullTx()
-	err = models.SharedMessageRecipientDAO.UpdateRecipient(tx, req.MessageRecipientId, req.AdminId, req.MessageMediaInstanceId, req.User, req.MessageRecipientGroupIds, req.Description, req.IsOn)
+	err = models.SharedMessageRecipientDAO.UpdateRecipient(tx, req.MessageRecipientId, req.AdminId, req.MessageMediaInstanceId, req.User, req.MessageRecipientGroupIds, req.Description, req.TimeFrom, req.TimeTo, req.IsOn)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +44,7 @@ func (this *MessageRecipientService) UpdateMessageRecipient(ctx context.Context,
 	return this.Success()
 }
 
-// 删除接收人
+// DeleteMessageRecipient 删除接收人
 func (this *MessageRecipientService) DeleteMessageRecipient(ctx context.Context, req *pb.DeleteMessageRecipientRequest) (*pb.RPCSuccess, error) {
 	_, err := this.ValidateAdmin(ctx, 0)
 	if err != nil {
@@ -58,7 +59,7 @@ func (this *MessageRecipientService) DeleteMessageRecipient(ctx context.Context,
 	return this.Success()
 }
 
-// 计算接收人数量
+// CountAllEnabledMessageRecipients 计算接收人数量
 func (this *MessageRecipientService) CountAllEnabledMessageRecipients(ctx context.Context, req *pb.CountAllEnabledMessageRecipientsRequest) (*pb.RPCCountResponse, error) {
 	_, err := this.ValidateAdmin(ctx, 0)
 	if err != nil {
@@ -74,7 +75,7 @@ func (this *MessageRecipientService) CountAllEnabledMessageRecipients(ctx contex
 	return this.SuccessCount(count)
 }
 
-// 列出单页接收人
+// ListEnabledMessageRecipients 列出单页接收人
 func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Context, req *pb.ListEnabledMessageRecipientsRequest) (*pb.ListEnabledMessageRecipientsResponse, error) {
 	_, err := this.ValidateAdmin(ctx, 0)
 	if err != nil {
@@ -82,6 +83,7 @@ func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Co
 	}
 
 	var tx = this.NullTx()
+	var cacheMap = utils.NewCacheMap()
 	recipients, err := models.SharedMessageRecipientDAO.ListAllEnabledRecipients(tx, req.AdminId, req.MessageRecipientGroupId, req.MediaType, req.Keyword, req.Offset, req.Size)
 	if err != nil {
 		return nil, err
@@ -104,7 +106,7 @@ func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Co
 		}
 
 		// 媒介实例
-		instance, err := models.SharedMessageMediaInstanceDAO.FindEnabledMessageMediaInstance(tx, int64(recipient.InstanceId))
+		instance, err := models.SharedMessageMediaInstanceDAO.FindEnabledMessageMediaInstance(tx, int64(recipient.InstanceId), cacheMap)
 		if err != nil {
 			return nil, err
 		}
@@ -145,13 +147,15 @@ func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Co
 			IsOn:                   recipient.IsOn == 1,
 			MessageRecipientGroups: pbGroups,
 			Description:            recipient.Description,
+			TimeFrom:               recipient.TimeFrom,
+			TimeTo:                 recipient.TimeTo,
 		})
 	}
 
 	return &pb.ListEnabledMessageRecipientsResponse{MessageRecipients: pbRecipients}, nil
 }
 
-// 查找单个接收人信息
+// FindEnabledMessageRecipient 查找单个接收人信息
 func (this *MessageRecipientService) FindEnabledMessageRecipient(ctx context.Context, req *pb.FindEnabledMessageRecipientRequest) (*pb.FindEnabledMessageRecipientResponse, error) {
 	_, err := this.ValidateAdmin(ctx, 0)
 	if err != nil {
@@ -159,7 +163,8 @@ func (this *MessageRecipientService) FindEnabledMessageRecipient(ctx context.Con
 	}
 
 	var tx = this.NullTx()
-	recipient, err := models.SharedMessageRecipientDAO.FindEnabledMessageRecipient(tx, req.MessageRecipientId)
+	var cacheMap = utils.NewCacheMap()
+	recipient, err := models.SharedMessageRecipientDAO.FindEnabledMessageRecipient(tx, req.MessageRecipientId, cacheMap)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +188,7 @@ func (this *MessageRecipientService) FindEnabledMessageRecipient(ctx context.Con
 	}
 
 	// 媒介实例
-	instance, err := models.SharedMessageMediaInstanceDAO.FindEnabledMessageMediaInstance(tx, int64(recipient.InstanceId))
+	instance, err := models.SharedMessageMediaInstanceDAO.FindEnabledMessageMediaInstance(tx, int64(recipient.InstanceId), cacheMap)
 	if err != nil {
 		return nil, err
 	}
@@ -224,5 +229,7 @@ func (this *MessageRecipientService) FindEnabledMessageRecipient(ctx context.Con
 		IsOn:                   recipient.IsOn == 1,
 		MessageRecipientGroups: pbGroups,
 		Description:            recipient.Description,
+		TimeFrom:               recipient.TimeFrom,
+		TimeTo:                 recipient.TimeTo,
 	}}, nil
 }

@@ -46,7 +46,6 @@ func TestIP2RegionLibrary_Lookup_Valid_IP(t *testing.T) {
 	}
 }
 
-
 func TestIP2RegionLibrary_Memory(t *testing.T) {
 	library := &IP2RegionLibrary{}
 	err := library.Load(Tea.Root + "/resources/ipdata/ip2region/ip2region.db")

@@ -3,16 +3,20 @@ package models
 import (
 	"crypto/md5"
 	"encoding/json"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/logs"
 	"testing"
+	"time"
 )
 
 func TestServerDAO_ComposeServerConfig(t *testing.T) {
 	dbs.NotifyReady()
 	var tx *dbs.Tx
-	config, err := SharedServerDAO.ComposeServerConfigWithServerId(tx, 1)
+	config, err := SharedServerDAO.ComposeServerConfigWithServerId(tx, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +26,7 @@ func TestServerDAO_ComposeServerConfig(t *testing.T) {
 func TestServerDAO_ComposeServerConfig_AliasServerNames(t *testing.T) {
 	dbs.NotifyReady()
 	var tx *dbs.Tx
-	config, err := SharedServerDAO.ComposeServerConfigWithServerId(tx, 14)
+	config, err := SharedServerDAO.ComposeServerConfigWithServerId(tx, 14, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +36,7 @@ func TestServerDAO_ComposeServerConfig_AliasServerNames(t *testing.T) {
 func TestServerDAO_UpdateServerConfig(t *testing.T) {
 	dbs.NotifyReady()
 	var tx *dbs.Tx
-	config, err := SharedServerDAO.ComposeServerConfigWithServerId(tx, 1)
+	config, err := SharedServerDAO.ComposeServerConfigWithServerId(tx, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,10 +45,7 @@ func TestServerDAO_UpdateServerConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = SharedServerDAO.UpdateServerConfig(tx, 1, configJSON, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Log(string(configJSON))
 	t.Log("ok")
 }
 
@@ -99,7 +100,7 @@ func TestServerDAO_CheckPortIsUsing(t *testing.T) {
 	//	t.Log("isUsing:", isUsing)
 	//}
 	{
-		isUsing, err := SharedServerDAO.CheckPortIsUsing(tx, 18, 1234, 44, "tcp")
+		isUsing, err := SharedServerDAO.CheckTCPPortIsUsing(tx, 18, 3306, 0, "tcp")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -139,11 +140,125 @@ func TestServerDAO_ExistServerNameInCluster(t *testing.T) {
 func TestServerDAO_FindAllEnabledServersWithNode(t *testing.T) {
 	dbs.NotifyReady()
 
+	var before = time.Now()
 	servers, err := SharedServerDAO.FindAllEnabledServersWithNode(nil, 48)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, server := range servers {
 		t.Log("serverId:", server.Id, "clusterId:", server.ClusterId)
+	}
+	t.Log(time.Since(before).Seconds()*1000, "ms")
+}
+
+func TestServerDAO_FindAllEnabledServersWithNode_Cache(t *testing.T) {
+	dbs.NotifyReady()
+
+	var cacheMap = utils.NewCacheMap()
+	{
+		servers, err := SharedServerDAO.FindAllEnabledServersWithNode(nil, 48)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, server := range servers {
+			_, _ = SharedServerDAO.ComposeServerConfig(nil, server, cacheMap, true)
+		}
+	}
+
+	var before = time.Now()
+	{
+		servers, err := SharedServerDAO.FindAllEnabledServersWithNode(nil, 48)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, server := range servers {
+			_, _ = SharedServerDAO.ComposeServerConfig(nil, server, cacheMap, true)
+		}
+	}
+	t.Log(time.Since(before).Seconds()*1000, "ms")
+}
+
+func TestServerDAO_FindAllEnabledServersWithDomain(t *testing.T) {
+	for _, domain := range []string{"yun4s.cn", "teaos.cn", "teaos2.cn", "cdn.teaos.cn", "cdn100.teaos.cn"} {
+		servers, err := NewServerDAO().FindAllEnabledServersWithDomain(nil, domain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(servers) > 0 {
+			for _, server := range servers {
+				t.Log(domain + ": " + server.ServerNames)
+			}
+		} else {
+			t.Log(domain + ": not found")
+		}
+	}
+}
+
+func TestServerDAO_UpdateServerTrafficLimitStatus(t *testing.T) {
+	dbs.NotifyReady()
+
+	var tx *dbs.Tx
+	before := time.Now()
+	defer func() {
+		t.Log(time.Since(before).Seconds()*1000, "ms")
+	}()
+	err := NewServerDAO().UpdateServerTrafficLimitStatus(tx, &serverconfigs.TrafficLimitConfig{
+		IsOn:           true,
+		DailySize:      &shared.SizeCapacity{Count: 1, Unit: "mb"},
+		MonthlySize:    &shared.SizeCapacity{Count: 10, Unit: "mb"},
+		TotalSize:      &shared.SizeCapacity{Count: 100, Unit: "gb"},
+		NoticePageBody: "",
+	}, 23, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("ok")
+}
+
+func TestServerDAO_CalculateServerTrafficLimitConfig(t *testing.T) {
+	dbs.NotifyReady()
+
+	var tx *dbs.Tx
+	before := time.Now()
+	defer func() {
+		t.Log(time.Since(before).Seconds()*1000, "ms")
+	}()
+
+	var cacheMap = utils.NewCacheMap()
+	config, err := SharedServerDAO.CalculateServerTrafficLimitConfig(tx, 23, cacheMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs.PrintAsJSON(config, t)
+}
+
+func TestServerDAO_CalculateServerTrafficLimitConfig_Cache(t *testing.T) {
+	dbs.NotifyReady()
+
+	var tx *dbs.Tx
+	before := time.Now()
+	defer func() {
+		t.Log(time.Since(before).Seconds()*1000, "ms")
+	}()
+
+	var cacheMap = utils.NewCacheMap()
+	for i := 0; i < 10; i++ {
+		config, err := SharedServerDAO.CalculateServerTrafficLimitConfig(tx, 23, cacheMap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = config
+	}
+}
+
+func BenchmarkServerDAO_CountAllEnabledServers(b *testing.B) {
+	SharedServerDAO = NewServerDAO()
+
+	for i := 0; i < b.N; i++ {
+		result, err := SharedServerDAO.CountAllEnabledServers(nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_ = result
 	}
 }

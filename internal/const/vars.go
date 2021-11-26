@@ -3,5 +3,7 @@
 package teaconst
 
 var (
-	IsPlus = false
+	IsPlus         = false
+	MaxNodes int32 = 0
+	NodeId   int64 = 0
 )

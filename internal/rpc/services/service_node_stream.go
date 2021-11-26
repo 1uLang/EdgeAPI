@@ -7,6 +7,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/configs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/messageconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
@@ -18,7 +19,9 @@ import (
 	"time"
 )
 
-// 命令请求相关
+var primaryNodeId int64 = 0
+
+// CommandRequest 命令请求相关
 type CommandRequest struct {
 	Id          int64
 	Code        string
@@ -38,11 +41,11 @@ func (this *CommandRequestWaiting) Close() {
 	close(this.Chan)
 }
 
-var responseChanMap = map[int64]*CommandRequestWaiting{} // request id => response
+var nodeResponseChanMap = map[int64]*CommandRequestWaiting{} // request id => response
 var commandRequestId = int64(0)
 
 var nodeLocker = &sync.Mutex{}
-var requestChanMap = map[int64]chan *CommandRequest{} // node id => chan
+var nodeRequestChanMap = map[int64]chan *CommandRequest{} // node id => chan
 
 func NextCommandRequestId() int64 {
 	return atomic.AddInt64(&commandRequestId, 1)
@@ -54,10 +57,10 @@ func init() {
 	go func() {
 		for range ticker.C {
 			nodeLocker.Lock()
-			for requestId, request := range responseChanMap {
+			for requestId, request := range nodeResponseChanMap {
 				if time.Now().Unix()-request.Timestamp > 3600 {
-					responseChanMap[requestId].Close()
-					delete(responseChanMap, requestId)
+					nodeResponseChanMap[requestId].Close()
+					delete(nodeResponseChanMap, requestId)
 				}
 			}
 			nodeLocker.Unlock()
@@ -73,6 +76,33 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 	if err != nil {
 		return err
 	}
+
+	// 选择一个作为主节点
+	if primaryNodeId == 0 {
+		primaryNodeId = nodeId
+	}
+
+	defer func() {
+		// 修改当前API节点的主边缘节点
+		if primaryNodeId == nodeId {
+			primaryNodeId = 0
+
+			nodeLocker.Lock()
+			if len(nodeRequestChanMap) > 0 {
+				for anotherNodeId := range nodeRequestChanMap {
+					primaryNodeId = anotherNodeId
+					break
+				}
+			}
+			nodeLocker.Unlock()
+		}
+
+		// 修改在线状态
+		err = models.SharedNodeDAO.UpdateNodeActive(nil, nodeId, false)
+		if err != nil {
+			remotelogs.Error("NODE_SERVICE", "change node active failed: "+err.Error())
+		}
+	}()
 
 	// 返回连接成功
 	{
@@ -103,6 +133,7 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 	if err != nil {
 		return err
 	}
+
 	if !oldIsActive {
 		err = models.SharedNodeDAO.UpdateNodeActive(tx, nodeId, true)
 		if err != nil {
@@ -120,23 +151,23 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 		}
 		subject := "节点\"" + nodeName + "\"已经恢复在线"
 		msg := "节点\"" + nodeName + "\"已经恢复在线"
-		err = models.SharedMessageDAO.CreateNodeMessage(tx, nodeconfigs.NodeRoleNode, clusterId, nodeId, models.MessageTypeNodeActive, models.MessageLevelSuccess, subject, msg, nil)
+		err = models.SharedMessageDAO.CreateNodeMessage(tx, nodeconfigs.NodeRoleNode, clusterId, nodeId, models.MessageTypeNodeActive, models.MessageLevelSuccess, subject, msg, nil, false)
 		if err != nil {
 			return err
 		}
 	}
 
 	nodeLocker.Lock()
-	requestChan, ok := requestChanMap[nodeId]
+	requestChan, ok := nodeRequestChanMap[nodeId]
 	if !ok {
 		requestChan = make(chan *CommandRequest, 1024)
-		requestChanMap[nodeId] = requestChan
+		nodeRequestChanMap[nodeId] = requestChan
 	}
 	nodeLocker.Unlock()
 
 	defer func() {
 		nodeLocker.Lock()
-		delete(requestChanMap, nodeId)
+		delete(nodeRequestChanMap, nodeId)
 		nodeLocker.Unlock()
 	}()
 
@@ -189,7 +220,7 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 			}()
 
 			nodeLocker.Lock()
-			responseChan, ok := responseChanMap[req.RequestId]
+			responseChan, ok := nodeResponseChanMap[req.RequestId]
 			if ok {
 				select {
 				case responseChan.Chan <- req:
@@ -215,25 +246,37 @@ func (this *NodeService) SendCommandToNode(ctx context.Context, req *pb.NodeStre
 		return nil, errors.New("node id should not be less than 0")
 	}
 
+	return SendCommandToNode(req.NodeId, req.RequestId, req.Code, req.DataJSON, req.TimeoutSeconds, true)
+}
+
+// SendCommandToNode 向节点发送命令
+func SendCommandToNode(nodeId int64, requestId int64, messageCode string, dataJSON []byte, timeoutSeconds int32, forceConnecting bool) (result *pb.NodeStreamMessage, err error) {
 	nodeLocker.Lock()
-	requestChan, ok := requestChanMap[nodeId]
+	requestChan, ok := nodeRequestChanMap[nodeId]
 	nodeLocker.Unlock()
 
 	if !ok {
-		return &pb.NodeStreamMessage{
-			RequestId: req.RequestId,
-			IsOk:      false,
-			Message:   "node '" + strconv.FormatInt(nodeId, 10) + "' not connected yet",
-		}, nil
+		if forceConnecting {
+			return &pb.NodeStreamMessage{
+				RequestId: requestId,
+				IsOk:      false,
+				Message:   "node '" + strconv.FormatInt(nodeId, 10) + "' not connected yet",
+			}, nil
+		} else {
+			return &pb.NodeStreamMessage{
+				RequestId: requestId,
+				IsOk:      true,
+			}, nil
+		}
 	}
 
-	req.RequestId = NextCommandRequestId()
+	requestId = NextCommandRequestId()
 
 	select {
 	case requestChan <- &CommandRequest{
-		Id:          req.RequestId,
-		Code:        req.Code,
-		CommandJSON: req.DataJSON,
+		Id:          requestId,
+		Code:        messageCode,
+		CommandJSON: dataJSON,
 	}:
 		// 加入到等待队列中
 		respChan := make(chan *pb.NodeStreamMessage, 1)
@@ -243,11 +286,10 @@ func (this *NodeService) SendCommandToNode(ctx context.Context, req *pb.NodeStre
 		}
 
 		nodeLocker.Lock()
-		responseChanMap[req.RequestId] = waiting
+		nodeResponseChanMap[requestId] = waiting
 		nodeLocker.Unlock()
 
 		// 等待响应
-		timeoutSeconds := req.TimeoutSeconds
 		if timeoutSeconds <= 0 {
 			timeoutSeconds = 10
 		}
@@ -256,14 +298,14 @@ func (this *NodeService) SendCommandToNode(ctx context.Context, req *pb.NodeStre
 		case resp := <-respChan:
 			// 从队列中删除
 			nodeLocker.Lock()
-			delete(responseChanMap, req.RequestId)
+			delete(nodeResponseChanMap, requestId)
 			waiting.Close()
 			nodeLocker.Unlock()
 
 			if resp == nil {
 				return &pb.NodeStreamMessage{
-					RequestId: req.RequestId,
-					Code:      req.Code,
+					RequestId: requestId,
+					Code:      messageCode,
 					Message:   "response timeout",
 					IsOk:      false,
 				}, nil
@@ -273,21 +315,21 @@ func (this *NodeService) SendCommandToNode(ctx context.Context, req *pb.NodeStre
 		case <-timeout.C:
 			// 从队列中删除
 			nodeLocker.Lock()
-			delete(responseChanMap, req.RequestId)
+			delete(nodeResponseChanMap, requestId)
 			waiting.Close()
 			nodeLocker.Unlock()
 
 			return &pb.NodeStreamMessage{
-				RequestId: req.RequestId,
-				Code:      req.Code,
+				RequestId: requestId,
+				Code:      messageCode,
 				Message:   "response timeout over " + fmt.Sprintf("%d", timeoutSeconds) + " seconds",
 				IsOk:      false,
 			}, nil
 		}
 	default:
 		return &pb.NodeStreamMessage{
-			RequestId: req.RequestId,
-			Code:      req.Code,
+			RequestId: requestId,
+			Code:      messageCode,
 			Message:   "command queue is full over " + strconv.Itoa(len(requestChan)),
 			IsOk:      false,
 		}, nil

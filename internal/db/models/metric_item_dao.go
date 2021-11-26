@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	_ "github.com/go-sql-driver/mysql"
@@ -229,14 +230,32 @@ func (this *MetricItemDAO) ListEnabledItems(tx *dbs.Tx, category serverconfigs.M
 }
 
 // FindAllPublicItems 取得公用的指标
-func (this *MetricItemDAO) FindAllPublicItems(tx *dbs.Tx) (result []*MetricItem, err error) {
+func (this *MetricItemDAO) FindAllPublicItems(tx *dbs.Tx, category string, cacheMap *utils.CacheMap) (result []*MetricItem, err error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":FindAllPublicItems:" + category
+	cache, ok := cacheMap.Get(cacheKey)
+	if ok {
+		return cache.([]*MetricItem), nil
+	}
+
 	_, err = this.Query(tx).
 		State(MetricItemStateEnabled).
 		Attr("userId", 0).
+		Attr("category", category).
 		Attr("isPublic", true).
 		DescPk().
 		Slice(&result).
 		FindAll()
+	if err != nil {
+		return nil, err
+	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, result)
+	}
+
 	return
 }
 

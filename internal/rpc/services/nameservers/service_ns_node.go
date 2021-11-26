@@ -15,6 +15,7 @@ import (
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/logs"
 	stringutil "github.com/iwind/TeaGo/utils/string"
+	"io"
 	"path/filepath"
 )
 
@@ -275,6 +276,7 @@ func (this *NSNodeService) FindEnabledNSNode(ctx context.Context, req *pb.FindEn
 		},
 		InstallStatus: installStatusResult,
 		IsOn:          node.IsOn == 1,
+		IsActive:      node.IsActive == 1,
 		NodeLogin:     respLogin,
 	}}, nil
 }
@@ -465,7 +467,7 @@ func (this *NSNodeService) DownloadNSNodeInstallationFile(ctx context.Context, r
 	}
 
 	data, offset, err := file.Read(req.ChunkOffset)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return nil, err
 	}
 
@@ -516,4 +518,56 @@ func (this *NSNodeService) UpdateNSNodeLogin(ctx context.Context, req *pb.Update
 	err = models.SharedNodeLoginDAO.UpdateNodeLogin(tx, req.NodeLogin.Id, req.NodeLogin.Name, req.NodeLogin.Type, req.NodeLogin.Params)
 
 	return this.Success()
+}
+
+// StartNSNode 启动节点
+func (this *NSNodeService) StartNSNode(ctx context.Context, req *pb.StartNSNodeRequest) (*pb.StartNSNodeResponse, error) {
+	// 校验节点
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	err = installers.SharedNSNodeQueue().StartNode(req.NsNodeId)
+	if err != nil {
+		return &pb.StartNSNodeResponse{
+			IsOk:  false,
+			Error: err.Error(),
+		}, nil
+	}
+
+	// 修改状态
+	var tx = this.NullTx()
+	err = models.SharedNSNodeDAO.UpdateNodeActive(tx, req.NsNodeId, true)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.StartNSNodeResponse{IsOk: true}, nil
+}
+
+// StopNSNode 停止节点
+func (this *NSNodeService) StopNSNode(ctx context.Context, req *pb.StopNSNodeRequest) (*pb.StopNSNodeResponse, error) {
+	// 校验节点
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	err = installers.SharedNSNodeQueue().StopNode(req.NsNodeId)
+	if err != nil {
+		return &pb.StopNSNodeResponse{
+			IsOk:  false,
+			Error: err.Error(),
+		}, nil
+	}
+
+	// 修改状态
+	var tx = this.NullTx()
+	err = models.SharedNSNodeDAO.UpdateNodeActive(tx, req.NsNodeId, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.StopNSNodeResponse{IsOk: true}, nil
 }

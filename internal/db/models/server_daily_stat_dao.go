@@ -1,6 +1,7 @@
 package models
 
 import (
+	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	_ "github.com/go-sql-driver/mysql"
@@ -53,12 +54,14 @@ func init() {
 // SaveStats 提交数据
 func (this *ServerDailyStatDAO) SaveStats(tx *dbs.Tx, stats []*pb.ServerDailyStat) error {
 	var serverUserMap = map[int64]int64{} // serverId => userId
+	var cacheMap = utils.NewCacheMap()
 	for _, stat := range stats {
 		day := timeutil.FormatTime("Ymd", stat.CreatedAt)
 		hour := timeutil.FormatTime("YmdH", stat.CreatedAt)
 		timeFrom := timeutil.FormatTime("His", stat.CreatedAt)
 		timeTo := timeutil.FormatTime("His", stat.CreatedAt+5*60-1) // 5分钟
 
+		// 所属用户
 		serverUserId, ok := serverUserMap[stat.ServerId]
 		if !ok {
 			userId, err := SharedServerDAO.FindServerUserId(tx, stat.ServerId)
@@ -85,6 +88,7 @@ func (this *ServerDailyStatDAO) SaveStats(tx *dbs.Tx, stats []*pb.ServerDailySta
 				"countCachedRequests": stat.CountCachedRequests,
 				"countAttackRequests": stat.CountAttackRequests,
 				"attackBytes":         stat.AttackBytes,
+				"planId":              stat.PlanId,
 				"day":                 day,
 				"hour":                hour,
 				"timeFrom":            timeFrom,
@@ -96,11 +100,32 @@ func (this *ServerDailyStatDAO) SaveStats(tx *dbs.Tx, stats []*pb.ServerDailySta
 				"countCachedRequests": dbs.SQL("countCachedRequests+:countCachedRequests"),
 				"countAttackRequests": dbs.SQL("countAttackRequests+:countAttackRequests"),
 				"attackBytes":         dbs.SQL("attackBytes+:attackBytes"),
+				"planId":              stat.PlanId,
 			})
 		if err != nil {
 			return err
 		}
+
+		// 更新流量限制状态
+		if stat.CheckTrafficLimiting {
+			trafficLimitConfig, err := SharedServerDAO.CalculateServerTrafficLimitConfig(tx, stat.ServerId, cacheMap)
+			if err != nil {
+				return err
+			}
+			if trafficLimitConfig != nil && trafficLimitConfig.IsOn && !trafficLimitConfig.IsEmpty() {
+				err = SharedServerDAO.IncreaseServerTotalTraffic(tx, stat.ServerId, stat.Bytes)
+				if err != nil {
+					return err
+				}
+
+				err = SharedServerDAO.UpdateServerTrafficLimitStatus(tx, trafficLimitConfig, stat.ServerId, false)
+				if err != nil {
+					return err
+				}
+			}
+		}
 	}
+
 	return nil
 }
 
@@ -114,6 +139,30 @@ func (this *ServerDailyStatDAO) SumUserMonthly(tx *dbs.Tx, userId int64, regionI
 	return query.Between("day", month+"01", month+"32").
 		Attr("userId", userId).
 		SumInt64("bytes", 0)
+}
+
+// SumUserMonthlyWithoutPlan 根据用户计算某月合计并排除套餐
+// month 格式为YYYYMM
+func (this *ServerDailyStatDAO) SumUserMonthlyWithoutPlan(tx *dbs.Tx, userId int64, regionId int64, month string) (int64, error) {
+	query := this.Query(tx)
+	if regionId > 0 {
+		query.Attr("regionId", regionId)
+	}
+	return query.
+		Attr("planId", 0).
+		Between("day", month+"01", month+"32").
+		Attr("userId", userId).
+		SumInt64("bytes", 0)
+}
+
+// SumUserMonthlyFee 计算用户某个月费用
+// month 格式为YYYYMM
+func (this *ServerDailyStatDAO) SumUserMonthlyFee(tx *dbs.Tx, userId int64, month string) (float64, error) {
+	return this.Query(tx).
+		Attr("userId", userId).
+		Between("day", month+"01", month+"32").
+		Gt("fee", 0).
+		Sum("fee", 0)
 }
 
 // SumUserMonthlyPeek 获取某月带宽峰值
@@ -233,13 +282,44 @@ func (this *ServerDailyStatDAO) SumDailyStat(tx *dbs.Tx, serverId int64, day str
 	stat = &pb.ServerDailyStat{}
 
 	if !regexp.MustCompile(`^\d{8}$`).MatchString(day) {
-		return
+		return nil, errors.New("invalid day '" + day + "'")
 	}
 
 	one, _, err := this.Query(tx).
 		Result("SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes").
 		Attr("serverId", serverId).
 		Attr("day", day).
+		FindOne()
+	if err != nil {
+		return nil, err
+	}
+
+	if one == nil {
+		return
+	}
+
+	stat.Bytes = one.GetInt64("bytes")
+	stat.CachedBytes = one.GetInt64("cachedBytes")
+	stat.CountRequests = one.GetInt64("countRequests")
+	stat.CountCachedRequests = one.GetInt64("countCachedRequests")
+	stat.CountAttackRequests = one.GetInt64("countAttackRequests")
+	stat.AttackBytes = one.GetInt64("attackBytes")
+	return
+}
+
+// SumMonthlyStat 获取某月内的流量
+// month 格式为YYYYMM
+func (this *ServerDailyStatDAO) SumMonthlyStat(tx *dbs.Tx, serverId int64, month string) (stat *pb.ServerDailyStat, err error) {
+	stat = &pb.ServerDailyStat{}
+
+	if !regexp.MustCompile(`^\d{6}$`).MatchString(month) {
+		return
+	}
+
+	one, _, err := this.Query(tx).
+		Result("SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes").
+		Attr("serverId", serverId).
+		Between("day", month+"01", month+"31").
 		FindOne()
 	if err != nil {
 		return nil, err
@@ -291,6 +371,17 @@ func (this *ServerDailyStatDAO) FindDailyStats(tx *dbs.Tx, serverId int64, dayFr
 	return
 }
 
+// FindMonthlyStatsWithPlan 查找某月有套餐的流量
+// month YYYYMM
+func (this *ServerDailyStatDAO) FindMonthlyStatsWithPlan(tx *dbs.Tx, month string) (result []*ServerDailyStat, err error) {
+	_, err = this.Query(tx).
+		Between("day", month+"01", month+"32").
+		Gt("planId", 0).
+		Slice(&result).
+		FindAll()
+	return
+}
+
 // FindHourlyStats 按小时统计
 func (this *ServerDailyStatDAO) FindHourlyStats(tx *dbs.Tx, serverId int64, hourFrom string, hourTo string) (result []*ServerDailyStat, err error) {
 	ones, err := this.Query(tx).
@@ -334,6 +425,14 @@ func (this *ServerDailyStatDAO) FindTopUserStats(tx *dbs.Tx, hourFrom string, ho
 		Slice(&result).
 		FindAll()
 	return
+}
+
+// UpdateStatFee 设置费用
+func (this *ServerDailyStatDAO) UpdateStatFee(tx *dbs.Tx, statId int64, fee float32) error {
+	return this.Query(tx).
+		Pk(statId).
+		Set("fee", fee).
+		UpdateQuickly()
 }
 
 // Clean 清理历史数据

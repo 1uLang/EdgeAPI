@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+func TestDNSPodProvider_GetDomains(t *testing.T) {
+	provider, err := testDNSPodProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	domains, err := provider.GetDomains()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log(domains)
+}
+
 func TestDNSPodProvider_GetRoutes(t *testing.T) {
 	provider, err := testDNSPodProvider()
 	if err != nil {
@@ -46,6 +58,7 @@ func TestDNSPodProvider_AddRecord(t *testing.T) {
 		Name:  "hello-forward",
 		Value: "hello.yun4s.cn",
 		Route: "联通",
+		TTL:   300,
 	})
 	if err != nil {
 		t.Fatal(err)

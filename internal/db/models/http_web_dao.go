@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
@@ -75,7 +76,16 @@ func (this *HTTPWebDAO) FindEnabledHTTPWeb(tx *dbs.Tx, id int64) (*HTTPWeb, erro
 }
 
 // ComposeWebConfig 组合配置
-func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64) (*serverconfigs.HTTPWebConfig, error) {
+func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *utils.CacheMap) (*serverconfigs.HTTPWebConfig, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":config:" + types.String(webId)
+	var cache, _ = cacheMap.Get(cacheKey)
+	if cache != nil {
+		return cache.(*serverconfigs.HTTPWebConfig), nil
+	}
+
 	web, err := SharedHTTPWebDAO.FindEnabledHTTPWeb(tx, webId)
 	if err != nil {
 		return nil, err
@@ -98,20 +108,41 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64) (*serverconfig
 		config.Root = rootConfig
 	}
 
-	// gzip
-	if IsNotNull(web.Gzip) {
-		gzipRef := &serverconfigs.HTTPGzipRef{}
-		err = json.Unmarshal([]byte(web.Gzip), gzipRef)
+	// compression
+	if IsNotNull(web.Compression) {
+		compression := &serverconfigs.HTTPCompressionConfig{}
+		err = json.Unmarshal([]byte(web.Compression), compression)
 		if err != nil {
 			return nil, err
 		}
-		config.GzipRef = gzipRef
+		config.Compression = compression
 
-		gzipConfig, err := SharedHTTPGzipDAO.ComposeGzipConfig(tx, gzipRef.GzipId)
-		if err != nil {
-			return nil, err
+		// gzip
+		if compression.GzipRef != nil && compression.GzipRef.Id > 0 {
+			gzipConfig, err := SharedHTTPGzipDAO.ComposeGzipConfig(tx, compression.GzipRef.Id)
+			if err != nil {
+				return nil, err
+			}
+			compression.Gzip = gzipConfig
 		}
-		config.Gzip = gzipConfig
+
+		// brotli
+		if compression.BrotliRef != nil && compression.BrotliRef.Id > 0 {
+			brotliConfig, err := SharedHTTPBrotliPolicyDAO.ComposeBrotliConfig(tx, compression.BrotliRef.Id)
+			if err != nil {
+				return nil, err
+			}
+			compression.Brotli = brotliConfig
+		}
+
+		// deflate
+		if compression.DeflateRef != nil && compression.DeflateRef.Id > 0 {
+			deflateConfig, err := SharedHTTPDeflatePolicyDAO.ComposeDeflateConfig(tx, compression.DeflateRef.Id)
+			if err != nil {
+				return nil, err
+			}
+			compression.Deflate = deflateConfig
+		}
 	}
 
 	// charset
@@ -181,7 +212,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64) (*serverconfig
 			return nil, err
 		}
 		for index, page := range pages {
-			pageConfig, err := SharedHTTPPageDAO.ComposePageConfig(tx, page.Id)
+			pageConfig, err := SharedHTTPPageDAO.ComposePageConfig(tx, page.Id, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -235,7 +266,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64) (*serverconfig
 
 		// 自定义防火墙设置
 		if firewallRef.FirewallPolicyId > 0 {
-			firewallPolicy, err := SharedHTTPFirewallPolicyDAO.ComposeFirewallPolicy(tx, firewallRef.FirewallPolicyId)
+			firewallPolicy, err := SharedHTTPFirewallPolicyDAO.ComposeFirewallPolicy(tx, firewallRef.FirewallPolicyId, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -257,7 +288,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64) (*serverconfig
 		if len(refs) > 0 {
 			config.LocationRefs = refs
 
-			locations, err := SharedHTTPLocationDAO.ConvertLocationRefs(tx, refs)
+			locations, err := SharedHTTPLocationDAO.ConvertLocationRefs(tx, refs, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -302,7 +333,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64) (*serverconfig
 			return nil, err
 		}
 		for _, ref := range refs {
-			rewriteRule, err := SharedHTTPRewriteRuleDAO.ComposeRewriteRule(tx, ref.RewriteRuleId)
+			rewriteRule, err := SharedHTTPRewriteRuleDAO.ComposeRewriteRule(tx, ref.RewriteRuleId, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -356,7 +387,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64) (*serverconfig
 		}
 		var newRefs []*serverconfigs.HTTPAuthPolicyRef
 		for _, ref := range authConfig.PolicyRefs {
-			policyConfig, err := SharedHTTPAuthPolicyDAO.ComposePolicyConfig(tx, ref.AuthPolicyId)
+			policyConfig, err := SharedHTTPAuthPolicyDAO.ComposePolicyConfig(tx, ref.AuthPolicyId, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -366,6 +397,33 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64) (*serverconfig
 			}
 		}
 		config.Auth = authConfig
+	}
+
+	// WebP
+	if IsNotNull(web.Webp) {
+		var webpConfig = &serverconfigs.WebPImageConfig{}
+		err = json.Unmarshal([]byte(web.Webp), webpConfig)
+		if err != nil {
+			return nil, err
+		}
+		config.WebP = webpConfig
+	}
+
+	// RemoteAddr
+	if IsNotNull(web.RemoteAddr) {
+		var remoteAddrConfig = &serverconfigs.HTTPRemoteAddrConfig{}
+		err = json.Unmarshal([]byte(web.RemoteAddr), remoteAddrConfig)
+		if err != nil {
+			return nil, err
+		}
+		config.RemoteAddr = remoteAddrConfig
+	}
+
+	// mergeSlashes
+	config.MergeSlashes = web.MergeSlashes == 1
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, config)
 	}
 
 	return config, nil
@@ -403,19 +461,50 @@ func (this *HTTPWebDAO) UpdateWeb(tx *dbs.Tx, webId int64, rootJSON []byte) erro
 	return this.NotifyUpdate(tx, webId)
 }
 
-// UpdateWebGzip 修改Gzip配置
-func (this *HTTPWebDAO) UpdateWebGzip(tx *dbs.Tx, webId int64, gzipJSON []byte) error {
+// UpdateWebCompression 修改压缩配置
+func (this *HTTPWebDAO) UpdateWebCompression(tx *dbs.Tx, webId int64, compressionConfig []byte) error {
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
 	op := NewHTTPWebOperator()
 	op.Id = webId
-	op.Gzip = JSONBytes(gzipJSON)
+	op.Compression = JSONBytes(compressionConfig)
 	err := this.Save(tx, op)
 	if err != nil {
 		return err
 	}
 
+	return this.NotifyUpdate(tx, webId)
+}
+
+// UpdateWebWebP 修改WebP配置
+func (this *HTTPWebDAO) UpdateWebWebP(tx *dbs.Tx, webId int64, webpConfig []byte) error {
+	if webId <= 0 {
+		return errors.New("invalid webId")
+	}
+	op := NewHTTPWebOperator()
+	op.Id = webId
+	op.Webp = JSONBytes(webpConfig)
+	err := this.Save(tx, op)
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx, webId)
+}
+
+// UpdateWebRemoteAddr 修改RemoteAddr配置
+func (this *HTTPWebDAO) UpdateWebRemoteAddr(tx *dbs.Tx, webId int64, remoteAddrConfig []byte) error {
+	if webId <= 0 {
+		return errors.New("invalid webId")
+	}
+	var op = NewHTTPWebOperator()
+	op.Id = webId
+	op.RemoteAddr = remoteAddrConfig
+	err := this.Save(tx, op)
+	if err != nil {
+		return err
+	}
 	return this.NotifyUpdate(tx, webId)
 }
 
@@ -795,8 +884,28 @@ func (this *HTTPWebDAO) FindEnabledWebIdWithGzipId(tx *dbs.Tx, gzipId int64) (we
 	return this.Query(tx).
 		State(HTTPWebStateEnabled).
 		ResultPk().
-		Where("JSON_CONTAINS(gzip, :jsonQuery)").
-		Param("jsonQuery", maps.Map{"gzipId": gzipId}.AsJSON()).
+		Where("JSON_CONTAINS(compression, :jsonQuery, '$.gzipRef')").
+		Param("jsonQuery", maps.Map{"id": gzipId}.AsJSON()).
+		FindInt64Col(0)
+}
+
+// FindEnabledWebIdWithBrotliPolicyId 查找包含某个Brotli配置的Web
+func (this *HTTPWebDAO) FindEnabledWebIdWithBrotliPolicyId(tx *dbs.Tx, brotliPolicyId int64) (webId int64, err error) {
+	return this.Query(tx).
+		State(HTTPWebStateEnabled).
+		ResultPk().
+		Where("JSON_CONTAINS(compression, :jsonQuery, '$.brotliRef')").
+		Param("jsonQuery", maps.Map{"id": brotliPolicyId}.AsJSON()).
+		FindInt64Col(0)
+}
+
+// FindEnabledWebIdWithDeflatePolicyId 查找包含某个Deflate配置的Web
+func (this *HTTPWebDAO) FindEnabledWebIdWithDeflatePolicyId(tx *dbs.Tx, deflatePolicyId int64) (webId int64, err error) {
+	return this.Query(tx).
+		State(HTTPWebStateEnabled).
+		ResultPk().
+		Where("JSON_CONTAINS(compression, :jsonQuery, '$.deflateRef')").
+		Param("jsonQuery", maps.Map{"id": deflatePolicyId}.AsJSON()).
 		FindInt64Col(0)
 }
 
@@ -863,6 +972,39 @@ func (this *HTTPWebDAO) FindWebServerId(tx *dbs.Tx, webId int64) (serverId int64
 	return this.FindWebServerId(tx, webId)
 }
 
+// FindWebServerGroupId 查找使用此Web的分组ID
+func (this *HTTPWebDAO) FindWebServerGroupId(tx *dbs.Tx, webId int64) (groupId int64, err error) {
+	if webId <= 0 {
+		return 0, nil
+	}
+	groupId, err = SharedServerGroupDAO.FindEnabledGroupIdWithWebId(tx, webId)
+	if err != nil {
+		return
+	}
+	if groupId > 0 {
+		return
+	}
+
+	// web在Location中的情况
+	locationId, err := SharedHTTPLocationDAO.FindEnabledLocationIdWithWebId(tx, webId)
+	if err != nil {
+		return 0, err
+	}
+	if locationId == 0 {
+		return
+	}
+	webId, err = this.FindEnabledWebIdWithLocationId(tx, locationId)
+	if err != nil {
+		return
+	}
+	if webId <= 0 {
+		return
+	}
+
+	// 第二轮查找
+	return this.FindWebServerGroupId(tx, webId)
+}
+
 // CheckUserWeb 检查用户权限
 func (this *HTTPWebDAO) CheckUserWeb(tx *dbs.Tx, userId int64, webId int64) error {
 	serverId, err := this.FindWebServerId(tx, webId)
@@ -898,6 +1040,8 @@ func (this *HTTPWebDAO) UpdateWebHostRedirects(tx *dbs.Tx, webId int64, hostRedi
 	return this.NotifyUpdate(tx, webId)
 }
 
+// 通用设置
+
 // FindWebHostRedirects 查找主机跳转
 func (this *HTTPWebDAO) FindWebHostRedirects(tx *dbs.Tx, webId int64) ([]byte, error) {
 	col, err := this.Query(tx).
@@ -910,14 +1054,41 @@ func (this *HTTPWebDAO) FindWebHostRedirects(tx *dbs.Tx, webId int64) ([]byte, e
 	return []byte(col), nil
 }
 
+// UpdateWebCommon 修改通用设置
+func (this *HTTPWebDAO) UpdateWebCommon(tx *dbs.Tx, webId int64, mergeSlashes bool) error {
+	if webId <= 0 {
+		return errors.New("invalid webId")
+	}
+	var op = NewHTTPWebOperator()
+	op.Id = webId
+	op.MergeSlashes = mergeSlashes
+	err := this.Save(tx, op)
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx, webId)
+}
+
 // NotifyUpdate 通知更新
 func (this *HTTPWebDAO) NotifyUpdate(tx *dbs.Tx, webId int64) error {
+	// server
 	serverId, err := this.FindWebServerId(tx, webId)
 	if err != nil {
 		return err
 	}
-	if serverId == 0 {
-		return nil
+	if serverId > 0 {
+		return SharedServerDAO.NotifyUpdate(tx, serverId)
 	}
-	return SharedServerDAO.NotifyUpdate(tx, serverId)
+
+	// group
+	groupId, err := this.FindWebServerGroupId(tx, webId)
+	if err != nil {
+		return err
+	}
+	if groupId > 0 {
+		return SharedServerGroupDAO.NotifyUpdate(tx, groupId)
+	}
+
+	return nil
 }

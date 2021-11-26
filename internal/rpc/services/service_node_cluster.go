@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
+	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns/dnsutils"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/tasks"
@@ -30,6 +31,7 @@ func (this *NodeClusterService) CreateNodeCluster(ctx context.Context, req *pb.C
 		return nil, err
 	}
 
+	// 系统服务
 	systemServices := map[string]maps.Map{}
 	if len(req.SystemServicesJSON) > 0 {
 		err = json.Unmarshal(req.SystemServicesJSON, &systemServices)
@@ -40,6 +42,24 @@ func (this *NodeClusterService) CreateNodeCluster(ctx context.Context, req *pb.C
 
 	var clusterId int64
 	err = this.RunTx(func(tx *dbs.Tx) error {
+		// 缓存策略
+		if req.HttpCachePolicyId <= 0 {
+			policyId, err := models.SharedHTTPCachePolicyDAO.CreateDefaultCachePolicy(tx, req.Name)
+			if err != nil {
+				return err
+			}
+			req.HttpCachePolicyId = policyId
+		}
+
+		// WAF策略
+		if req.HttpFirewallPolicyId <= 0 {
+			policyId, err := models.SharedHTTPFirewallPolicyDAO.CreateDefaultFirewallPolicy(tx, req.Name)
+			if err != nil {
+				return err
+			}
+			req.HttpFirewallPolicyId = policyId
+		}
+
 		clusterId, err = models.SharedNodeClusterDAO.CreateCluster(tx, adminId, req.Name, req.NodeGrantId, req.InstallDir, req.DnsDomainId, req.DnsName, req.HttpCachePolicyId, req.HttpFirewallPolicyId, systemServices)
 		if err != nil {
 			return err
@@ -63,7 +83,7 @@ func (this *NodeClusterService) UpdateNodeCluster(ctx context.Context, req *pb.U
 
 	tx := this.NullTx()
 
-	err = models.SharedNodeClusterDAO.UpdateCluster(tx, req.NodeClusterId, req.Name, req.NodeGrantId, req.InstallDir)
+	err = models.SharedNodeClusterDAO.UpdateCluster(tx, req.NodeClusterId, req.Name, req.NodeGrantId, req.InstallDir, req.TimeZone)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +160,7 @@ func (this *NodeClusterService) FindEnabledNodeCluster(ctx context.Context, req 
 		DnsName:              cluster.DnsName,
 		DnsDomainId:          int64(cluster.DnsDomainId),
 		IsOn:                 cluster.IsOn == 1,
+		TimeZone:             cluster.TimeZone,
 	}}, nil
 }
 
@@ -273,6 +294,7 @@ func (this *NodeClusterService) ListEnabledNodeClusters(ctx context.Context, req
 			DnsName:     cluster.DnsName,
 			DnsDomainId: int64(cluster.DnsDomainId),
 			IsOn:        cluster.IsOn == 1,
+			TimeZone:    cluster.TimeZone,
 		})
 	}
 
@@ -402,7 +424,7 @@ func (this *NodeClusterService) FindEnabledNodeClusterDNS(ctx context.Context, r
 
 	tx := this.NullTx()
 
-	dnsInfo, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, req.NodeClusterId)
+	dnsInfo, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, req.NodeClusterId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -426,10 +448,12 @@ func (this *NodeClusterService) FindEnabledNodeClusterDNS(ctx context.Context, r
 			Provider:        nil,
 			NodesAutoSync:   dnsConfig.NodesAutoSync,
 			ServersAutoSync: dnsConfig.ServersAutoSync,
+			CnameRecords:    dnsConfig.CNameRecords,
+			Ttl:             dnsConfig.TTL,
 		}, nil
 	}
 
-	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, int64(dnsInfo.DnsDomainId))
+	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, int64(dnsInfo.DnsDomainId), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -451,6 +475,8 @@ func (this *NodeClusterService) FindEnabledNodeClusterDNS(ctx context.Context, r
 		return nil, err
 	}
 
+	var defaultRoute = ""
+
 	var pbProvider *pb.DNSProvider = nil
 	if provider != nil {
 		pbProvider = &pb.DNSProvider{
@@ -458,6 +484,19 @@ func (this *NodeClusterService) FindEnabledNodeClusterDNS(ctx context.Context, r
 			Name:     provider.Name,
 			Type:     provider.Type,
 			TypeName: dnsclients.FindProviderTypeName(provider.Type),
+		}
+
+		manager := dnsclients.FindProvider(provider.Type)
+		if manager != nil {
+			apiParams, err := provider.DecodeAPIParams()
+			if err != nil {
+				return nil, err
+			}
+			err = manager.Auth(apiParams)
+			if err != nil {
+				return nil, err
+			}
+			defaultRoute = manager.DefaultRoute()
 		}
 	}
 
@@ -467,6 +506,9 @@ func (this *NodeClusterService) FindEnabledNodeClusterDNS(ctx context.Context, r
 		Provider:        pbProvider,
 		NodesAutoSync:   dnsConfig.NodesAutoSync,
 		ServersAutoSync: dnsConfig.ServersAutoSync,
+		CnameRecords:    dnsConfig.CNameRecords,
+		Ttl:             dnsConfig.TTL,
+		DefaultRoute:    defaultRoute,
 	}, nil
 }
 
@@ -559,7 +601,7 @@ func (this *NodeClusterService) UpdateNodeClusterDNS(ctx context.Context, req *p
 
 	tx := this.NullTx()
 
-	err = models.SharedNodeClusterDAO.UpdateClusterDNS(tx, req.NodeClusterId, req.DnsName, req.DnsDomainId, req.NodesAutoSync, req.ServersAutoSync)
+	err = models.SharedNodeClusterDAO.UpdateClusterDNS(tx, req.NodeClusterId, req.DnsName, req.DnsDomainId, req.NodesAutoSync, req.ServersAutoSync, req.CnameRecords, req.Ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +618,7 @@ func (this *NodeClusterService) CheckNodeClusterDNSChanges(ctx context.Context, 
 
 	tx := this.NullTx()
 
-	cluster, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, req.NodeClusterId)
+	cluster, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, req.NodeClusterId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -586,7 +628,7 @@ func (this *NodeClusterService) CheckNodeClusterDNSChanges(ctx context.Context, 
 	}
 
 	domainId := int64(cluster.DnsDomainId)
-	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, domainId)
+	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, domainId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -598,8 +640,13 @@ func (this *NodeClusterService) CheckNodeClusterDNSChanges(ctx context.Context, 
 		return nil, err
 	}
 
+	defaultRoute, err := dnsutils.FindDefaultDomainRoute(tx, domain)
+	if err != nil {
+		return nil, err
+	}
+
 	service := &DNSDomainService{}
-	changes, _, _, _, _, _, _, err := service.findClusterDNSChanges(cluster, records, domain.Name)
+	changes, _, _, _, _, _, _, err := service.findClusterDNSChanges(cluster, records, domain.Name, defaultRoute)
 	if err != nil {
 		return nil, err
 	}
@@ -618,7 +665,7 @@ func (this *NodeClusterService) FindEnabledNodeClusterTOA(ctx context.Context, r
 
 	tx := this.NullTx()
 
-	config, err := models.SharedNodeClusterDAO.FindClusterTOAConfig(tx, req.NodeClusterId)
+	config, err := models.SharedNodeClusterDAO.FindClusterTOAConfig(tx, req.NodeClusterId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -858,7 +905,7 @@ func (this *NodeClusterService) FindFreePortInNodeCluster(ctx context.Context, r
 			continue
 		}
 
-		isUsing, err := models.SharedServerDAO.CheckPortIsUsing(tx, req.NodeClusterId, port, 0, "")
+		isUsing, err := models.SharedServerDAO.CheckPortIsUsing(tx, req.NodeClusterId, req.ProtocolFamily, port, 0, "")
 		if err != nil {
 			return nil, err
 		}
@@ -878,7 +925,7 @@ func (this *NodeClusterService) CheckPortIsUsingInNodeCluster(ctx context.Contex
 	}
 
 	var tx = this.NullTx()
-	isUsing, err := models.SharedServerDAO.CheckPortIsUsing(tx, req.NodeClusterId, int(req.Port), req.ExcludeServerId, req.ExcludeProtocol)
+	isUsing, err := models.SharedServerDAO.CheckPortIsUsing(tx, req.NodeClusterId, req.ProtocolFamily, int(req.Port), req.ExcludeServerId, req.ExcludeProtocol)
 	if err != nil {
 		return nil, err
 	}
@@ -951,9 +998,7 @@ func (this *NodeClusterService) FindEnabledNodeClusterConfigInfo(ctx context.Con
 	result.HasThresholds = countThresholds > 0
 
 	// message receivers
-	countReceivers, err := models.SharedMessageReceiverDAO.CountAllEnabledReceivers(tx, models.MessageTaskTarget{
-		ClusterId: req.NodeClusterId,
-	}, "")
+	countReceivers, err := models.SharedMessageReceiverDAO.CountAllEnabledReceivers(tx, nodeconfigs.NodeRoleNode, req.NodeClusterId, 0, 0, "")
 	if err != nil {
 		return nil, err
 	}

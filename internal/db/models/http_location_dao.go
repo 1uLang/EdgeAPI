@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	_ "github.com/go-sql-driver/mysql"
@@ -131,7 +132,16 @@ func (this *HTTPLocationDAO) UpdateLocation(tx *dbs.Tx, locationId int64, name s
 }
 
 // ComposeLocationConfig 组合配置
-func (this *HTTPLocationDAO) ComposeLocationConfig(tx *dbs.Tx, locationId int64) (*serverconfigs.HTTPLocationConfig, error) {
+func (this *HTTPLocationDAO) ComposeLocationConfig(tx *dbs.Tx, locationId int64, cacheMap *utils.CacheMap) (*serverconfigs.HTTPLocationConfig, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":config:" + types.String(locationId)
+	var cacheConfig, _ = cacheMap.Get(cacheKey)
+	if cacheConfig != nil {
+		return cacheConfig.(*serverconfigs.HTTPLocationConfig), nil
+	}
+
 	location, err := this.FindEnabledHTTPLocation(tx, locationId)
 	if err != nil {
 		return nil, err
@@ -151,7 +161,7 @@ func (this *HTTPLocationDAO) ComposeLocationConfig(tx *dbs.Tx, locationId int64)
 
 	// web
 	if location.WebId > 0 {
-		webConfig, err := SharedHTTPWebDAO.ComposeWebConfig(tx, int64(location.WebId))
+		webConfig, err := SharedHTTPWebDAO.ComposeWebConfig(tx, int64(location.WebId), cacheMap)
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +177,7 @@ func (this *HTTPLocationDAO) ComposeLocationConfig(tx *dbs.Tx, locationId int64)
 		}
 		config.ReverseProxyRef = ref
 		if ref.ReverseProxyId > 0 {
-			reverseProxyConfig, err := SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, ref.ReverseProxyId)
+			reverseProxyConfig, err := SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, ref.ReverseProxyId, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -183,6 +193,10 @@ func (this *HTTPLocationDAO) ComposeLocationConfig(tx *dbs.Tx, locationId int64)
 			return nil, err
 		}
 		config.Conds = conds
+	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, config)
 	}
 
 	return config, nil
@@ -248,13 +262,13 @@ func (this *HTTPLocationDAO) UpdateLocationWeb(tx *dbs.Tx, locationId int64, web
 }
 
 // ConvertLocationRefs 转换引用为配置
-func (this *HTTPLocationDAO) ConvertLocationRefs(tx *dbs.Tx, refs []*serverconfigs.HTTPLocationRef) (locations []*serverconfigs.HTTPLocationConfig, err error) {
+func (this *HTTPLocationDAO) ConvertLocationRefs(tx *dbs.Tx, refs []*serverconfigs.HTTPLocationRef, cacheMap *utils.CacheMap) (locations []*serverconfigs.HTTPLocationConfig, err error) {
 	for _, ref := range refs {
-		config, err := this.ComposeLocationConfig(tx, ref.LocationId)
+		config, err := this.ComposeLocationConfig(tx, ref.LocationId, cacheMap)
 		if err != nil {
 			return nil, err
 		}
-		children, err := this.ConvertLocationRefs(tx, ref.Children)
+		children, err := this.ConvertLocationRefs(tx, ref.Children, cacheMap)
 		if err != nil {
 			return nil, err
 		}
@@ -276,7 +290,7 @@ func (this *HTTPLocationDAO) FindEnabledLocationIdWithWebId(tx *dbs.Tx, webId in
 		FindInt64Col(0)
 }
 
-// FindEnabledLocationIdWithReverseProxyId 查找包含某个反向代理的Server
+// FindEnabledLocationIdWithReverseProxyId 查找包含某个反向代理的路由规则
 func (this *HTTPLocationDAO) FindEnabledLocationIdWithReverseProxyId(tx *dbs.Tx, reverseProxyId int64) (serverId int64, err error) {
 	return this.Query(tx).
 		State(ServerStateEnabled).
@@ -285,7 +299,6 @@ func (this *HTTPLocationDAO) FindEnabledLocationIdWithReverseProxyId(tx *dbs.Tx,
 		ResultPk().
 		FindInt64Col(0)
 }
-
 
 // NotifyUpdate 通知更新
 func (this *HTTPLocationDAO) NotifyUpdate(tx *dbs.Tx, locationId int64) error {

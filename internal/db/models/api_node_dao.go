@@ -12,6 +12,7 @@ import (
 	"github.com/iwind/TeaGo/rands"
 	"github.com/iwind/TeaGo/types"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -211,6 +212,23 @@ func (this *APINodeDAO) CountAllEnabledAPINodes(tx *dbs.Tx) (int64, error) {
 		Count()
 }
 
+// CountAllEnabledAndOnAPINodes 计算启用中的API节点数量
+func (this *APINodeDAO) CountAllEnabledAndOnAPINodes(tx *dbs.Tx) (int64, error) {
+	return this.Query(tx).
+		State(APINodeStateEnabled).
+		Attr("isOn", true).
+		Count()
+}
+
+// CountAllEnabledAndOnOfflineAPINodes 计算API节点数量
+func (this *APINodeDAO) CountAllEnabledAndOnOfflineAPINodes(tx *dbs.Tx) (int64, error) {
+	return this.Query(tx).
+		State(APINodeStateEnabled).
+		Attr("isOn", true).
+		Where("(status IS NULL OR NOT JSON_EXTRACT(status, '$.isActive') OR UNIX_TIMESTAMP()-JSON_EXTRACT(status, '$.updatedAt')>60)").
+		Count()
+}
+
 // ListEnabledAPINodes 列出单页的API节点
 func (this *APINodeDAO) ListEnabledAPINodes(tx *dbs.Tx, offset int64, size int64) (result []*APINode, err error) {
 	_, err = this.Query(tx).
@@ -285,5 +303,21 @@ func (this *APINodeDAO) CountAllLowerVersionNodes(tx *dbs.Tx, version string) (i
 		Where("status IS NOT NULL").
 		Where("(JSON_EXTRACT(status, '$.buildVersionCode') IS NULL OR JSON_EXTRACT(status, '$.buildVersionCode')<:version)").
 		Param("version", utils.VersionToLong(version)).
+		Count()
+}
+
+// CountAllEnabledAPINodesWithSSLPolicyIds 计算使用SSL策略的所有API节点数量
+func (this *APINodeDAO) CountAllEnabledAPINodesWithSSLPolicyIds(tx *dbs.Tx, sslPolicyIds []int64) (count int64, err error) {
+	if len(sslPolicyIds) == 0 {
+		return
+	}
+	policyStringIds := []string{}
+	for _, policyId := range sslPolicyIds {
+		policyStringIds = append(policyStringIds, strconv.FormatInt(policyId, 10))
+	}
+	return this.Query(tx).
+		State(APINodeStateEnabled).
+		Where("(FIND_IN_SET(JSON_EXTRACT(https, '$.sslPolicyRef.sslPolicyId'), :policyIds) OR FIND_IN_SET(JSON_EXTRACT(restHTTPS, '$.sslPolicyRef.sslPolicyId'), :policyIds))").
+		Param("policyIds", strings.Join(policyStringIds, ",")).
 		Count()
 }

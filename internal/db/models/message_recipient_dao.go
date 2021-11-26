@@ -3,10 +3,13 @@ package models
 import (
 	"encoding/json"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
+	"github.com/iwind/TeaGo/types"
+	"regexp"
 )
 
 const (
@@ -54,19 +57,34 @@ func (this *MessageRecipientDAO) DisableMessageRecipient(tx *dbs.Tx, id int64) e
 }
 
 // FindEnabledMessageRecipient 查找启用中的条目
-func (this *MessageRecipientDAO) FindEnabledMessageRecipient(tx *dbs.Tx, id int64) (*MessageRecipient, error) {
+func (this *MessageRecipientDAO) FindEnabledMessageRecipient(tx *dbs.Tx, recipientId int64, cacheMap *utils.CacheMap,
+) (*MessageRecipient, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":record:" + types.String(recipientId)
+	var cache, _ = cacheMap.Get(cacheKey)
+	if cache != nil {
+		return cache.(*MessageRecipient), nil
+	}
+
 	result, err := this.Query(tx).
-		Pk(id).
+		Pk(recipientId).
 		Attr("state", MessageRecipientStateEnabled).
 		Find()
 	if result == nil {
 		return nil, err
 	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, result)
+	}
+
 	return result.(*MessageRecipient), err
 }
 
 // CreateRecipient 创建接收人
-func (this *MessageRecipientDAO) CreateRecipient(tx *dbs.Tx, adminId int64, instanceId int64, user string, groupIds []int64, description string) (int64, error) {
+func (this *MessageRecipientDAO) CreateRecipient(tx *dbs.Tx, adminId int64, instanceId int64, user string, groupIds []int64, description string, timeFrom string, timeTo string) (int64, error) {
 	op := NewMessageRecipientOperator()
 	op.AdminId = adminId
 	op.InstanceId = instanceId
@@ -83,13 +101,22 @@ func (this *MessageRecipientDAO) CreateRecipient(tx *dbs.Tx, adminId int64, inst
 	}
 	op.GroupIds = groupIdsJSON
 
+	// 判断格式
+	var timeReg = regexp.MustCompile(`^\d+:\d+:\d+$`)
+	if timeReg.MatchString(timeFrom) {
+		op.TimeFrom = timeFrom
+	}
+	if timeReg.MatchString(timeTo) {
+		op.TimeTo = timeTo
+	}
+
 	op.IsOn = true
 	op.State = MessageRecipientStateEnabled
 	return this.SaveInt64(tx, op)
 }
 
 // UpdateRecipient 修改接收人
-func (this *MessageRecipientDAO) UpdateRecipient(tx *dbs.Tx, recipientId int64, adminId int64, instanceId int64, user string, groupIds []int64, description string, isOn bool) error {
+func (this *MessageRecipientDAO) UpdateRecipient(tx *dbs.Tx, recipientId int64, adminId int64, instanceId int64, user string, groupIds []int64, description string, timeFrom string, timeTo string, isOn bool) error {
 	if recipientId <= 0 {
 		return errors.New("invalid recipientId")
 	}
@@ -111,6 +138,20 @@ func (this *MessageRecipientDAO) UpdateRecipient(tx *dbs.Tx, recipientId int64, 
 	op.GroupIds = groupIdsJSON
 
 	op.Description = description
+
+	// 判断格式
+	var timeReg = regexp.MustCompile(`^\d+:\d+:\d+$`)
+	if timeReg.MatchString(timeFrom) {
+		op.TimeFrom = timeFrom
+	} else {
+		op.TimeFrom = dbs.SQL("NULL")
+	}
+	if timeReg.MatchString(timeTo) {
+		op.TimeTo = timeTo
+	} else {
+		op.TimeTo = dbs.SQL("NULL")
+	}
+
 	op.IsOn = isOn
 	return this.Save(tx, op)
 }
@@ -186,4 +227,12 @@ func (this *MessageRecipientDAO) FindAllEnabledAndOnRecipientIdsWithGroup(tx *db
 		result = append(result, int64(one.(*MessageRecipient).Id))
 	}
 	return result, nil
+}
+
+// FindRecipientInstanceId 查找接收人的媒介
+func (this *MessageRecipientDAO) FindRecipientInstanceId(tx *dbs.Tx, recipientId int64) (int64, error) {
+	return this.Query(tx).
+		Pk(recipientId).
+		Result("instanceId").
+		FindInt64Col(0)
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/responses"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/alidns"
 	"github.com/iwind/TeaGo/maps"
+	"github.com/iwind/TeaGo/types"
 	"strings"
 )
 
@@ -29,6 +30,34 @@ func (this *AliDNSProvider) Auth(params maps.Map) error {
 		return errors.New("'accessKeySecret' should not be empty")
 	}
 	return nil
+}
+
+// GetDomains 获取所有域名列表
+func (this *AliDNSProvider) GetDomains() (domains []string, err error) {
+	pageNumber := 1
+	size := 100
+
+	for {
+		req := alidns.CreateDescribeDomainsRequest()
+		req.PageNumber = requests.NewInteger(pageNumber)
+		req.PageSize = requests.NewInteger(size)
+		resp := alidns.CreateDescribeDomainsResponse()
+		err = this.doAPI(req, resp)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, domain := range resp.Domains.Domain {
+			domains = append(domains, domain.DomainName)
+		}
+
+		pageNumber++
+		if int64((pageNumber-1)*size) >= resp.TotalCount {
+			break
+		}
+	}
+
+	return
 }
 
 // GetRecords 获取域名列表
@@ -59,6 +88,7 @@ func (this *AliDNSProvider) GetRecords(domain string) (records []*dnstypes.Recor
 				Type:  record.Type,
 				Value: record.Value,
 				Route: record.Line,
+				TTL:   types.Int32(record.TTL),
 			})
 		}
 
@@ -113,6 +143,10 @@ func (this *AliDNSProvider) AddRecord(domain string, newRecord *dnstypes.Record)
 	req.DomainName = domain
 	req.Line = newRecord.Route
 
+	if newRecord.TTL > 0 {
+		req.TTL = requests.NewInteger(types.Int(newRecord.TTL))
+	}
+
 	resp := alidns.CreateAddDomainRecordResponse()
 	err := this.doAPI(req, resp)
 	if err != nil {
@@ -133,6 +167,10 @@ func (this *AliDNSProvider) UpdateRecord(domain string, record *dnstypes.Record,
 	req.Type = newRecord.Type
 	req.Value = newRecord.Value
 	req.Line = newRecord.Route
+
+	if newRecord.TTL > 0 {
+		req.TTL = requests.NewInteger(types.Int(newRecord.TTL))
+	}
 
 	resp := alidns.CreateUpdateDomainRecordResponse()
 	err := this.doAPI(req, resp)

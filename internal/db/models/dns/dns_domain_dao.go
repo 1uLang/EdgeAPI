@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients/dnstypes"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -58,13 +59,24 @@ func (this *DNSDomainDAO) DisableDNSDomain(tx *dbs.Tx, id int64) error {
 }
 
 // FindEnabledDNSDomain 查找启用中的条目
-func (this *DNSDomainDAO) FindEnabledDNSDomain(tx *dbs.Tx, id int64) (*DNSDomain, error) {
+func (this *DNSDomainDAO) FindEnabledDNSDomain(tx *dbs.Tx, domainId int64, cacheMap *utils.CacheMap) (*DNSDomain, error) {
+	var cacheKey = this.Table + ":record:" + types.String(domainId)
+	if cacheMap != nil {
+		cache, _ := cacheMap.Get(cacheKey)
+		if cache != nil {
+			return cache.(*DNSDomain), nil
+		}
+	}
+
 	result, err := this.Query(tx).
-		Pk(id).
+		Pk(domainId).
 		Attr("state", DNSDomainStateEnabled).
 		Find()
 	if result == nil {
 		return nil, err
+	}
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, result)
 	}
 	return result.(*DNSDomain), err
 }
@@ -86,6 +98,7 @@ func (this *DNSDomainDAO) CreateDomain(tx *dbs.Tx, adminId int64, userId int64, 
 	op.Name = name
 	op.State = DNSDomainStateEnabled
 	op.IsOn = true
+	op.IsUp = true
 	err := this.Save(tx, op)
 	if err != nil {
 		return 0, err
@@ -246,4 +259,33 @@ func (this *DNSDomainDAO) ExistDomainRecord(tx *dbs.Tx, domainId int64, recordNa
 		Where("JSON_CONTAINS(records, :query)").
 		Param("query", query.AsJSON()).
 		Exist()
+}
+
+// FindEnabledDomainWithName 根据名称查找某个域名
+func (this *DNSDomainDAO) FindEnabledDomainWithName(tx *dbs.Tx, providerId int64, domainName string) (*DNSDomain, error) {
+	one, err := this.Query(tx).
+		State(DNSDomainStateEnabled).
+		Attr("providerId", providerId).
+		Attr("name", domainName).
+		Find()
+	if one != nil {
+		return one.(*DNSDomain), nil
+	}
+	return nil, err
+}
+
+// UpdateDomainIsUp 设置是否在线
+func (this *DNSDomainDAO) UpdateDomainIsUp(tx *dbs.Tx, domainId int64, isUp bool) error {
+	return this.Query(tx).
+		Pk(domainId).
+		Set("isUp", isUp).
+		UpdateQuickly()
+}
+
+// UpdateDomainIsDeleted 设置域名为删除
+func (this *DNSDomainDAO) UpdateDomainIsDeleted(tx *dbs.Tx, domainId int64, isDeleted bool) error {
+	return this.Query(tx).
+		Pk(domainId).
+		Set("isDeleted", isDeleted).
+		UpdateQuickly()
 }

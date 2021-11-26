@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/iwind/TeaGo/lists"
 )
 
 // IPListService IP名单相关服务
@@ -21,7 +23,7 @@ func (this *IPListService) CreateIPList(ctx context.Context, req *pb.CreateIPLis
 
 	tx := this.NullTx()
 
-	listId, err := models.SharedIPListDAO.CreateIPList(tx, userId, req.Type, req.Name, req.Code, req.TimeoutJSON, req.Description, req.IsPublic)
+	listId, err := models.SharedIPListDAO.CreateIPList(tx, userId, req.Type, req.Name, req.Code, req.TimeoutJSON, req.Description, req.IsPublic, req.IsGlobal)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +57,7 @@ func (this *IPListService) FindEnabledIPList(ctx context.Context, req *pb.FindEn
 
 	tx := this.NullTx()
 
-	list, err := models.SharedIPListDAO.FindEnabledIPList(tx, req.IpListId)
+	list, err := models.SharedIPListDAO.FindEnabledIPList(tx, req.IpListId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +72,7 @@ func (this *IPListService) FindEnabledIPList(ctx context.Context, req *pb.FindEn
 		Code:        list.Code,
 		TimeoutJSON: []byte(list.Timeout),
 		Description: list.Description,
+		IsGlobal:    list.IsGlobal == 1,
 	}}, nil
 }
 
@@ -96,12 +99,12 @@ func (this *IPListService) ListEnabledIPLists(ctx context.Context, req *pb.ListE
 	}
 
 	var tx = this.NullTx()
-	lists, err := models.SharedIPListDAO.ListEnabledIPLists(tx, req.Type, req.IsPublic, req.Keyword, req.Offset, req.Size)
+	ipLists, err := models.SharedIPListDAO.ListEnabledIPLists(tx, req.Type, req.IsPublic, req.Keyword, req.Offset, req.Size)
 	if err != nil {
 		return nil, err
 	}
 	var pbLists []*pb.IPList
-	for _, list := range lists {
+	for _, list := range ipLists {
 		pbLists = append(pbLists, &pb.IPList{
 			Id:          int64(list.Id),
 			IsOn:        list.IsOn == 1,
@@ -111,6 +114,7 @@ func (this *IPListService) ListEnabledIPLists(ctx context.Context, req *pb.ListE
 			TimeoutJSON: []byte(list.Timeout),
 			IsPublic:    list.IsPublic == 1,
 			Description: list.Description,
+			IsGlobal:    list.IsGlobal == 1,
 		})
 	}
 	return &pb.ListEnabledIPListsResponse{IpLists: pbLists}, nil
@@ -128,6 +132,13 @@ func (this *IPListService) DeleteIPList(ctx context.Context, req *pb.DeleteIPLis
 	if err != nil {
 		return nil, err
 	}
+
+	// 删除所有IP
+	err = models.SharedIPItemDAO.DisableIPItemsWithListId(tx, req.IpListId)
+	if err != nil {
+		return nil, err
+	}
+
 	return this.Success()
 }
 
@@ -144,4 +155,51 @@ func (this *IPListService) ExistsEnabledIPList(ctx context.Context, req *pb.Exis
 		return nil, err
 	}
 	return &pb.ExistsEnabledIPListResponse{Exists: b}, nil
+}
+
+// FindEnabledIPListContainsIP 根据IP来搜索IP名单
+func (this *IPListService) FindEnabledIPListContainsIP(ctx context.Context, req *pb.FindEnabledIPListContainsIPRequest) (*pb.FindEnabledIPListContainsIPResponse, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	items, err := models.SharedIPItemDAO.FindEnabledItemsWithIP(tx, req.Ip)
+	if err != nil {
+		return nil, err
+	}
+
+	var pbLists = []*pb.IPList{}
+	var listIds = []int64{}
+	var cacheMap = utils.NewCacheMap()
+	for _, item := range items {
+		if lists.ContainsInt64(listIds, int64(item.ListId)) {
+			continue
+		}
+
+		list, err := models.SharedIPListDAO.FindEnabledIPList(tx, int64(item.ListId), cacheMap)
+		if err != nil {
+			return nil, err
+		}
+		if list == nil {
+			continue
+		}
+		if list.IsPublic != 1 {
+			continue
+		}
+		pbLists = append(pbLists, &pb.IPList{
+			Id:          int64(list.Id),
+			IsOn:        list.IsOn == 1,
+			Type:        list.Type,
+			Name:        list.Name,
+			Code:        list.Code,
+			IsPublic:    list.IsPublic == 1,
+			IsGlobal:    list.IsGlobal == 1,
+			Description: "",
+		})
+
+		listIds = append(listIds, int64(item.ListId))
+	}
+	return &pb.FindEnabledIPListContainsIPResponse{IpLists: pbLists}, nil
 }

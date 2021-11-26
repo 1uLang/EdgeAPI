@@ -12,6 +12,14 @@ import (
 	"testing"
 )
 
+func TestCloudFlareProvider_GetDomains(t *testing.T) {
+	provider, err := testCloudFlareProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log(provider.GetDomains())
+}
+
 func TestCloudFlareProvider_GetRecords(t *testing.T) {
 	provider, err := testCloudFlareProvider()
 	if err != nil {
@@ -90,6 +98,7 @@ func TestCloudFlareProvider_AddRecord(t *testing.T) {
 			Type:  dnstypes.RecordTypeA,
 			Value: "182.92.212.46",
 			Route: "",
+			TTL:   300,
 		})
 		if err != nil {
 			t.Fatal(err)

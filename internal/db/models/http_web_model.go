@@ -20,7 +20,8 @@ type HTTPWeb struct {
 	ResponseHeader     string `field:"responseHeader"`     // 响应Header配置
 	AccessLog          string `field:"accessLog"`          // 访问日志配置
 	Stat               string `field:"stat"`               // 统计配置
-	Gzip               string `field:"gzip"`               // Gzip配置
+	Gzip               string `field:"gzip"`               // Gzip配置（v0.3.2弃用）
+	Compression        string `field:"compression"`        // 压缩配置
 	Cache              string `field:"cache"`              // 缓存配置
 	Firewall           string `field:"firewall"`           // 防火墙设置
 	Locations          string `field:"locations"`          // 路由规则配置
@@ -29,6 +30,9 @@ type HTTPWeb struct {
 	HostRedirects      string `field:"hostRedirects"`      // 域名跳转
 	Fastcgi            string `field:"fastcgi"`            // Fastcgi配置
 	Auth               string `field:"auth"`               // 认证策略配置
+	Webp               string `field:"webp"`               // WebP配置
+	RemoteAddr         string `field:"remoteAddr"`         // 客户端IP配置
+	MergeSlashes       uint8  `field:"mergeSlashes"`       // 是否合并路径中的斜杠
 }
 
 type HTTPWebOperator struct {
@@ -50,7 +54,8 @@ type HTTPWebOperator struct {
 	ResponseHeader     interface{} // 响应Header配置
 	AccessLog          interface{} // 访问日志配置
 	Stat               interface{} // 统计配置
-	Gzip               interface{} // Gzip配置
+	Gzip               interface{} // Gzip配置（v0.3.2弃用）
+	Compression        interface{} // 压缩配置
 	Cache              interface{} // 缓存配置
 	Firewall           interface{} // 防火墙设置
 	Locations          interface{} // 路由规则配置
@@ -59,6 +64,9 @@ type HTTPWebOperator struct {
 	HostRedirects      interface{} // 域名跳转
 	Fastcgi            interface{} // Fastcgi配置
 	Auth               interface{} // 认证策略配置
+	Webp               interface{} // WebP配置
+	RemoteAddr         interface{} // 客户端IP配置
+	MergeSlashes       interface{} // 是否合并路径中的斜杠
 }
 
 func NewHTTPWebOperator() *HTTPWebOperator {

@@ -68,7 +68,7 @@ func TestServerDailyStatDAO_SumMinutelyRequests(t *testing.T) {
 	dbs.NotifyReady()
 	var tx *dbs.Tx
 
-	stat, err := NewServerDailyStatDAO().SumMinutelyStat(tx, 23, timeutil.Format("Ymd") + "1435")
+	stat, err := NewServerDailyStatDAO().SumMinutelyStat(tx, 23, timeutil.Format("Ymd")+"1435")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/iwind/TeaGo/dbs"
 )
 
 type APINodeService struct {
@@ -26,7 +27,7 @@ func (this *APINodeService) CreateAPINode(ctx context.Context, req *pb.CreateAPI
 		return nil, err
 	}
 
-	return &pb.CreateAPINodeResponse{NodeId: nodeId}, nil
+	return &pb.CreateAPINodeResponse{ApiNodeId: nodeId}, nil
 }
 
 // UpdateAPINode 修改API节点
@@ -38,7 +39,7 @@ func (this *APINodeService) UpdateAPINode(ctx context.Context, req *pb.UpdateAPI
 
 	tx := this.NullTx()
 
-	err = models.SharedAPINodeDAO.UpdateAPINode(tx, req.NodeId, req.Name, req.Description, req.HttpJSON, req.HttpsJSON, req.RestIsOn, req.RestHTTPJSON, req.RestHTTPSJSON, req.AccessAddrsJSON, req.IsOn)
+	err = models.SharedAPINodeDAO.UpdateAPINode(tx, req.ApiNodeId, req.Name, req.Description, req.HttpJSON, req.HttpsJSON, req.RestIsOn, req.RestHTTPJSON, req.RestHTTPSJSON, req.AccessAddrsJSON, req.IsOn)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +56,7 @@ func (this *APINodeService) DeleteAPINode(ctx context.Context, req *pb.DeleteAPI
 
 	tx := this.NullTx()
 
-	err = models.SharedAPINodeDAO.DisableAPINode(tx, req.NodeId)
+	err = models.SharedAPINodeDAO.DisableAPINode(tx, req.ApiNodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +100,7 @@ func (this *APINodeService) FindAllEnabledAPINodes(ctx context.Context, req *pb.
 		})
 	}
 
-	return &pb.FindAllEnabledAPINodesResponse{Nodes: result}, nil
+	return &pb.FindAllEnabledAPINodesResponse{ApiNodes: result}, nil
 }
 
 // CountAllEnabledAPINodes 计算API节点数量
@@ -112,6 +113,23 @@ func (this *APINodeService) CountAllEnabledAPINodes(ctx context.Context, req *pb
 	tx := this.NullTx()
 
 	count, err := models.SharedAPINodeDAO.CountAllEnabledAPINodes(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.SuccessCount(count)
+}
+
+// CountAllEnabledAndOnAPINodes 计算API节点数量
+func (this *APINodeService) CountAllEnabledAndOnAPINodes(ctx context.Context, req *pb.CountAllEnabledAndOnAPINodesRequest) (*pb.RPCCountResponse, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	tx := this.NullTx()
+
+	count, err := models.SharedAPINodeDAO.CountAllEnabledAndOnAPINodes(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -159,10 +177,10 @@ func (this *APINodeService) ListEnabledAPINodes(ctx context.Context, req *pb.Lis
 		})
 	}
 
-	return &pb.ListEnabledAPINodesResponse{Nodes: result}, nil
+	return &pb.ListEnabledAPINodesResponse{ApiNodes: result}, nil
 }
 
-// 根据ID查找节点
+// FindEnabledAPINode 根据ID查找节点
 func (this *APINodeService) FindEnabledAPINode(ctx context.Context, req *pb.FindEnabledAPINodeRequest) (*pb.FindEnabledAPINodeResponse, error) {
 	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
 	if err != nil {
@@ -171,13 +189,13 @@ func (this *APINodeService) FindEnabledAPINode(ctx context.Context, req *pb.Find
 
 	tx := this.NullTx()
 
-	node, err := models.SharedAPINodeDAO.FindEnabledAPINode(tx, req.NodeId)
+	node, err := models.SharedAPINodeDAO.FindEnabledAPINode(tx, req.ApiNodeId)
 	if err != nil {
 		return nil, err
 	}
 
 	if node == nil {
-		return &pb.FindEnabledAPINodeResponse{Node: nil}, nil
+		return &pb.FindEnabledAPINodeResponse{ApiNode: nil}, nil
 	}
 
 	accessAddrs, err := node.DecodeAccessAddrStrings()
@@ -201,7 +219,7 @@ func (this *APINodeService) FindEnabledAPINode(ctx context.Context, req *pb.Find
 		AccessAddrsJSON: []byte(node.AccessAddrs),
 		AccessAddrs:     accessAddrs,
 	}
-	return &pb.FindEnabledAPINodeResponse{Node: result}, nil
+	return &pb.FindEnabledAPINodeResponse{ApiNode: result}, nil
 }
 
 // FindCurrentAPINodeVersion 获取当前API节点的版本
@@ -212,4 +230,68 @@ func (this *APINodeService) FindCurrentAPINodeVersion(ctx context.Context, req *
 	}
 
 	return &pb.FindCurrentAPINodeVersionResponse{Version: teaconst.Version}, nil
+}
+
+// FindCurrentAPINode 获取当前API节点的信息
+func (this *APINodeService) FindCurrentAPINode(ctx context.Context, req *pb.FindCurrentAPINodeRequest) (*pb.FindCurrentAPINodeResponse, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var nodeId = teaconst.NodeId
+	var tx *dbs.Tx
+	node, err := models.SharedAPINodeDAO.FindEnabledAPINode(tx, nodeId)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return &pb.FindCurrentAPINodeResponse{ApiNode: nil}, nil
+	}
+
+	accessAddrs, err := node.DecodeAccessAddrStrings()
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.FindCurrentAPINodeResponse{ApiNode: &pb.APINode{
+		Id:              int64(node.Id),
+		IsOn:            node.IsOn == 1,
+		NodeClusterId:   0,
+		UniqueId:        "",
+		Secret:          "",
+		Name:            "",
+		Description:     "",
+		HttpJSON:        nil,
+		HttpsJSON:       nil,
+		RestIsOn:        false,
+		RestHTTPJSON:    nil,
+		RestHTTPSJSON:   nil,
+		AccessAddrsJSON: []byte(node.AccessAddrs),
+		AccessAddrs:     accessAddrs,
+		StatusJSON:      nil,
+	}}, nil
+}
+
+// CountAllEnabledAPINodesWithSSLCertId 计算使用某个SSL证书的API节点数量
+func (this *APINodeService) CountAllEnabledAPINodesWithSSLCertId(ctx context.Context, req *pb.CountAllEnabledAPINodesWithSSLCertIdRequest) (*pb.RPCCountResponse, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	policyIds, err := models.SharedSSLPolicyDAO.FindAllEnabledPolicyIdsWithCertId(tx, req.SslCertId)
+	if err != nil {
+		return nil, err
+	}
+	if len(policyIds) == 0 {
+		return this.SuccessCount(0)
+	}
+
+	count, err := models.SharedAPINodeDAO.CountAllEnabledAPINodesWithSSLPolicyIds(tx, policyIds)
+	if err != nil {
+		return nil, err
+	}
+	return this.SuccessCount(count)
 }

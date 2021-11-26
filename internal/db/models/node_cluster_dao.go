@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
-	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
-	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
@@ -143,6 +142,8 @@ func (this *NodeClusterDAO) CreateCluster(tx *dbs.Tx, adminId int64, name string
 	dnsConfig := &dnsconfigs.ClusterDNSConfig{
 		NodesAutoSync:   true,
 		ServersAutoSync: true,
+		CNameRecords:    []string{},
+		TTL:             0,
 	}
 	dnsJSON, err := json.Marshal(dnsConfig)
 	if err != nil {
@@ -177,7 +178,7 @@ func (this *NodeClusterDAO) CreateCluster(tx *dbs.Tx, adminId int64, name string
 }
 
 // UpdateCluster 修改集群
-func (this *NodeClusterDAO) UpdateCluster(tx *dbs.Tx, clusterId int64, name string, grantId int64, installDir string) error {
+func (this *NodeClusterDAO) UpdateCluster(tx *dbs.Tx, clusterId int64, name string, grantId int64, installDir string, timezone string) error {
 	if clusterId <= 0 {
 		return errors.New("invalid clusterId")
 	}
@@ -186,8 +187,12 @@ func (this *NodeClusterDAO) UpdateCluster(tx *dbs.Tx, clusterId int64, name stri
 	op.Name = name
 	op.GrantId = grantId
 	op.InstallDir = installDir
+	op.TimeZone = timezone
 	err := this.Save(tx, op)
-	return err
+	if err != nil {
+		return err
+	}
+	return this.NotifyUpdate(tx, clusterId)
 }
 
 // CountAllEnabledClusters 计算所有集群数量
@@ -195,7 +200,7 @@ func (this *NodeClusterDAO) CountAllEnabledClusters(tx *dbs.Tx, keyword string) 
 	query := this.Query(tx).
 		State(NodeClusterStateEnabled)
 	if len(keyword) > 0 {
-		query.Where("(name LIKE :keyword OR dnsName like :keyword)").
+		query.Where("(name LIKE :keyword OR dnsName like :keyword OR (dnsDomainId > 0 AND dnsDomainId IN (SELECT id FROM "+dns.SharedDNSDomainDAO.Table+" WHERE name LIKE :keyword AND state=1)))").
 			Param("keyword", "%"+keyword+"%")
 	}
 	return query.Count()
@@ -206,7 +211,7 @@ func (this *NodeClusterDAO) ListEnabledClusters(tx *dbs.Tx, keyword string, offs
 	query := this.Query(tx).
 		State(NodeClusterStateEnabled)
 	if len(keyword) > 0 {
-		query.Where("(name LIKE :keyword OR dnsName like :keyword)").
+		query.Where("(name LIKE :keyword OR dnsName like :keyword OR (dnsDomainId > 0 AND dnsDomainId IN (SELECT id FROM "+dns.SharedDNSDomainDAO.Table+" WHERE name LIKE :keyword AND state=1)))").
 			Param("keyword", "%"+keyword+"%")
 	}
 	_, err = query.
@@ -303,11 +308,8 @@ func (this *NodeClusterDAO) UpdateClusterHealthCheck(tx *dbs.Tx, clusterId int64
 	op := NewNodeClusterOperator()
 	op.Id = clusterId
 	op.HealthCheck = healthCheckJSON
-	err := this.Save(tx, op)
-	if err != nil {
-		return err
-	}
-	return this.NotifyUpdate(tx, clusterId)
+	// 不需要通知更新
+	return this.Save(tx, op)
 }
 
 // CountAllEnabledClustersWithGrantId 计算使用某个认证的集群数量
@@ -406,7 +408,15 @@ func (this *NodeClusterDAO) FindClusterGrantId(tx *dbs.Tx, clusterId int64) (int
 }
 
 // FindClusterDNSInfo 查找DNS信息
-func (this *NodeClusterDAO) FindClusterDNSInfo(tx *dbs.Tx, clusterId int64) (*NodeCluster, error) {
+func (this *NodeClusterDAO) FindClusterDNSInfo(tx *dbs.Tx, clusterId int64, cacheMap *utils.CacheMap) (*NodeCluster, error) {
+	var cacheKey = this.Table + ":FindClusterDNSInfo:" + types.String(clusterId)
+	if cacheMap != nil {
+		cache, ok := cacheMap.Get(cacheKey)
+		if ok {
+			return cache.(*NodeCluster), nil
+		}
+	}
+
 	one, err := this.Query(tx).
 		Pk(clusterId).
 		Result("id", "name", "dnsName", "dnsDomainId", "dns", "isOn").
@@ -416,6 +426,9 @@ func (this *NodeClusterDAO) FindClusterDNSInfo(tx *dbs.Tx, clusterId int64) (*No
 	}
 	if one == nil {
 		return nil, nil
+	}
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, one)
 	}
 	return one.(*NodeCluster), nil
 }
@@ -431,7 +444,7 @@ func (this *NodeClusterDAO) ExistClusterDNSName(tx *dbs.Tx, dnsName string, excl
 }
 
 // UpdateClusterDNS 修改集群DNS相关信息
-func (this *NodeClusterDAO) UpdateClusterDNS(tx *dbs.Tx, clusterId int64, dnsName string, dnsDomainId int64, nodesAutoSync bool, serversAutoSync bool) error {
+func (this *NodeClusterDAO) UpdateClusterDNS(tx *dbs.Tx, clusterId int64, dnsName string, dnsDomainId int64, nodesAutoSync bool, serversAutoSync bool, cnameRecords []string, ttl int32) error {
 	if clusterId <= 0 {
 		return errors.New("invalid clusterId")
 	}
@@ -440,9 +453,15 @@ func (this *NodeClusterDAO) UpdateClusterDNS(tx *dbs.Tx, clusterId int64, dnsNam
 	op.DnsName = dnsName
 	op.DnsDomainId = dnsDomainId
 
+	if len(cnameRecords) == 0 {
+		cnameRecords = []string{}
+	}
+
 	dnsConfig := &dnsconfigs.ClusterDNSConfig{
 		NodesAutoSync:   nodesAutoSync,
 		ServersAutoSync: serversAutoSync,
+		CNameRecords:    cnameRecords,
+		TTL:             ttl,
 	}
 	dnsJSON, err := json.Marshal(dnsConfig)
 	if err != nil {
@@ -461,118 +480,6 @@ func (this *NodeClusterDAO) UpdateClusterDNS(tx *dbs.Tx, clusterId int64, dnsNam
 	return this.NotifyDNSUpdate(tx, clusterId)
 }
 
-// CheckClusterDNS 检查集群的DNS问题
-func (this *NodeClusterDAO) CheckClusterDNS(tx *dbs.Tx, cluster *NodeCluster) (issues []*pb.DNSIssue, err error) {
-	clusterId := int64(cluster.Id)
-	domainId := int64(cluster.DnsDomainId)
-
-	// 检查域名
-	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, domainId)
-	if err != nil {
-		return nil, err
-	}
-	if domain == nil {
-		issues = append(issues, &pb.DNSIssue{
-			Target:      cluster.Name,
-			TargetId:    clusterId,
-			Type:        "cluster",
-			Description: "域名选择错误，需要重新选择",
-			Params:      nil,
-		})
-		return
-	}
-
-	// 检查二级域名
-	if len(cluster.DnsName) == 0 {
-		issues = append(issues, &pb.DNSIssue{
-			Target:      cluster.Name,
-			TargetId:    clusterId,
-			Type:        "cluster",
-			Description: "没有设置二级域名",
-			Params:      nil,
-		})
-		return
-	}
-
-	// TODO 检查域名格式
-
-	// TODO 检查域名是否已解析
-
-	// 检查节点
-	nodes, err := SharedNodeDAO.FindAllEnabledNodesDNSWithClusterId(tx, clusterId, true)
-	if err != nil {
-		return nil, err
-	}
-
-	// TODO 检查节点数量不能为0
-
-	for _, node := range nodes {
-		nodeId := int64(node.Id)
-
-		routeCodes, err := node.DNSRouteCodesForDomainId(domainId)
-		if err != nil {
-			return nil, err
-		}
-		if len(routeCodes) == 0 {
-			issues = append(issues, &pb.DNSIssue{
-				Target:      node.Name,
-				TargetId:    nodeId,
-				Type:        "node",
-				Description: "没有选择节点所属线路",
-				Params: map[string]string{
-					"clusterName": cluster.Name,
-					"clusterId":   numberutils.FormatInt64(clusterId),
-				},
-			})
-			continue
-		}
-
-		// 检查线路是否在已有线路中
-		for _, routeCode := range routeCodes {
-			routeOk, err := domain.ContainsRouteCode(routeCode)
-			if err != nil {
-				return nil, err
-			}
-			if !routeOk {
-				issues = append(issues, &pb.DNSIssue{
-					Target:      node.Name,
-					TargetId:    nodeId,
-					Type:        "node",
-					Description: "线路已经失效，请重新选择",
-					Params: map[string]string{
-						"clusterName": cluster.Name,
-						"clusterId":   numberutils.FormatInt64(clusterId),
-					},
-				})
-				continue
-			}
-		}
-
-		// 检查IP地址
-		ipAddr, err := SharedNodeIPAddressDAO.FindFirstNodeAccessIPAddress(tx, nodeId, nodeconfigs.NodeRoleNode)
-		if err != nil {
-			return nil, err
-		}
-		if len(ipAddr) == 0 {
-			issues = append(issues, &pb.DNSIssue{
-				Target:      node.Name,
-				TargetId:    nodeId,
-				Type:        "node",
-				Description: "没有设置IP地址",
-				Params: map[string]string{
-					"clusterName": cluster.Name,
-					"clusterId":   numberutils.FormatInt64(clusterId),
-				},
-			})
-			continue
-		}
-
-		// TODO 检查是否有解析记录
-	}
-
-	return
-}
-
 // FindClusterAdminId 查找集群所属管理员
 func (this *NodeClusterDAO) FindClusterAdminId(tx *dbs.Tx, clusterId int64) (int64, error) {
 	return this.Query(tx).
@@ -582,7 +489,15 @@ func (this *NodeClusterDAO) FindClusterAdminId(tx *dbs.Tx, clusterId int64) (int
 }
 
 // FindClusterTOAConfig 查找集群的TOA设置
-func (this *NodeClusterDAO) FindClusterTOAConfig(tx *dbs.Tx, clusterId int64) (*nodeconfigs.TOAConfig, error) {
+func (this *NodeClusterDAO) FindClusterTOAConfig(tx *dbs.Tx, clusterId int64, cacheMap *utils.CacheMap) (*nodeconfigs.TOAConfig, error) {
+	var cacheKey = this.Table + ":FindClusterTOAConfig:" + types.String(clusterId)
+	if cacheMap != nil {
+		cache, ok := cacheMap.Get(cacheKey)
+		if ok {
+			return cache.(*nodeconfigs.TOAConfig), nil
+		}
+	}
+
 	toa, err := this.Query(tx).
 		Pk(clusterId).
 		Result("toa").
@@ -599,6 +514,11 @@ func (this *NodeClusterDAO) FindClusterTOAConfig(tx *dbs.Tx, clusterId int64) (*
 	if err != nil {
 		return nil, err
 	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, config)
+	}
+
 	return config, nil
 }
 
@@ -682,11 +602,29 @@ func (this *NodeClusterDAO) FindAllEnabledNodeClusterIdsWithCachePolicyId(tx *db
 }
 
 // FindClusterHTTPFirewallPolicyId 获取集群的WAF策略ID
-func (this *NodeClusterDAO) FindClusterHTTPFirewallPolicyId(tx *dbs.Tx, clusterId int64) (int64, error) {
-	return this.Query(tx).
+func (this *NodeClusterDAO) FindClusterHTTPFirewallPolicyId(tx *dbs.Tx, clusterId int64, cacheMap *utils.CacheMap) (int64, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":FindClusterHTTPFirewallPolicyId:" + types.String(clusterId)
+	var cache, _ = cacheMap.Get(cacheKey)
+	if cache != nil {
+		return cache.(int64), nil
+	}
+
+	firewallPolicyId, err := this.Query(tx).
 		Pk(clusterId).
 		Result("httpFirewallPolicyId").
 		FindInt64Col(0)
+	if err != nil {
+		return 0, err
+	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, firewallPolicyId)
+	}
+
+	return firewallPolicyId, nil
 }
 
 // UpdateNodeClusterHTTPCachePolicyId 设置集群的缓存策略
@@ -702,11 +640,29 @@ func (this *NodeClusterDAO) UpdateNodeClusterHTTPCachePolicyId(tx *dbs.Tx, clust
 }
 
 // FindClusterHTTPCachePolicyId 获取集群的缓存策略ID
-func (this *NodeClusterDAO) FindClusterHTTPCachePolicyId(tx *dbs.Tx, clusterId int64) (int64, error) {
-	return this.Query(tx).
+func (this *NodeClusterDAO) FindClusterHTTPCachePolicyId(tx *dbs.Tx, clusterId int64, cacheMap *utils.CacheMap) (int64, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":FindClusterHTTPCachePolicyId:" + types.String(clusterId)
+	var cache, _ = cacheMap.Get(cacheKey)
+	if cache != nil {
+		return cache.(int64), nil
+	}
+
+	cachePolicyId, err := this.Query(tx).
 		Pk(clusterId).
 		Result("cachePolicyId").
 		FindInt64Col(0)
+	if err != nil {
+		return 0, err
+	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, cachePolicyId)
+	}
+
+	return cachePolicyId, nil
 }
 
 // UpdateNodeClusterHTTPFirewallPolicyId 设置集群的WAF策略
@@ -783,10 +739,19 @@ func (this *NodeClusterDAO) FindNodeClusterSystemServiceParams(tx *dbs.Tx, clust
 }
 
 // FindNodeClusterSystemServices 查找集群的所有服务设置
-func (this *NodeClusterDAO) FindNodeClusterSystemServices(tx *dbs.Tx, clusterId int64) (services map[string]maps.Map, err error) {
+func (this *NodeClusterDAO) FindNodeClusterSystemServices(tx *dbs.Tx, clusterId int64, cacheMap *utils.CacheMap) (services map[string]maps.Map, err error) {
 	if clusterId <= 0 {
 		return nil, errors.New("invalid clusterId")
 	}
+
+	var cacheKey = this.Table + ":FindNodeClusterSystemServices:" + types.String(clusterId)
+	if cacheMap != nil {
+		cache, ok := cacheMap.Get(cacheKey)
+		if ok {
+			return cache.(map[string]maps.Map), nil
+		}
+	}
+
 	service, err := this.Query(tx).
 		Pk(clusterId).
 		Result("systemServices").
@@ -801,6 +766,11 @@ func (this *NodeClusterDAO) FindNodeClusterSystemServices(tx *dbs.Tx, clusterId 
 			return nil, err
 		}
 	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, servicesMap)
+	}
+
 	return servicesMap, nil
 }
 
@@ -865,6 +835,40 @@ func (this *NodeClusterDAO) FindEnabledNodeClustersWithIds(tx *dbs.Tx, clusterId
 		result = append(result, cluster.(*NodeCluster))
 	}
 	return
+}
+
+// ExistsEnabledCluster 检查集群是否存在
+func (this *NodeClusterDAO) ExistsEnabledCluster(tx *dbs.Tx, clusterId int64) (bool, error) {
+	if clusterId <= 0 {
+		return false, nil
+	}
+	return this.Query(tx).
+		Pk(clusterId).
+		State(NodeClusterStateEnabled).
+		Exist()
+}
+
+// FindClusterTimezone 查找时区
+func (this *NodeClusterDAO) FindClusterTimezone(tx *dbs.Tx, clusterId int64, cacheMap *utils.CacheMap) (string, error) {
+	var cacheKey = this.Table + ":FindEnabledTimeZone:" + types.String(clusterId)
+	if cacheMap != nil {
+		cache, ok := cacheMap.Get(cacheKey)
+		if ok {
+			return cache.(string), nil
+		}
+	}
+
+	timeZone, err := this.Query(tx).
+		Pk(clusterId).
+		Result("timeZone").
+		FindStringCol("")
+	if err != nil {
+		return "", err
+	}
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, timeZone)
+	}
+	return timeZone, nil
 }
 
 // NotifyUpdate 通知更新

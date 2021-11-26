@@ -2,7 +2,6 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/TeaOSLab/EdgeAPI/internal/configs"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
@@ -18,7 +17,6 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +80,7 @@ func (this *HTTPAccessLogDAO) CreateHTTPAccessLogsWithDAO(tx *dbs.Tx, daoWrapper
 		fields["nodeId"] = accessLog.NodeId
 		fields["status"] = accessLog.Status
 		fields["createdAt"] = accessLog.Timestamp
-		fields["requestId"] = accessLog.RequestId + strconv.FormatInt(time.Now().UnixNano(), 10) + configs.PaddingId
+		fields["requestId"] = accessLog.RequestId
 		fields["firewallPolicyId"] = accessLog.FirewallPolicyId
 		fields["firewallRuleGroupId"] = accessLog.FirewallRuleGroupId
 		fields["firewallRuleSetId"] = accessLog.FirewallRuleSetId
@@ -90,7 +88,7 @@ func (this *HTTPAccessLogDAO) CreateHTTPAccessLogsWithDAO(tx *dbs.Tx, daoWrapper
 
 		// TODO 根据集群、服务设置获取IP
 		if tableDef.HasRemoteAddr {
-			fields["remoteAddr"] = accessLog.RawRemoteAddr
+			fields["remoteAddr"] = accessLog.RemoteAddr
 		}
 		if tableDef.HasDomain {
 			fields["domain"] = accessLog.Host
@@ -238,6 +236,7 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 			}
 			if hasFirewallPolicy {
 				query.Where("firewallPolicyId>0")
+				query.UseIndex("firewallPolicyId")
 			}
 
 			// keyword
@@ -254,6 +253,7 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 						}
 					} else {
 						query.Attr("remoteAddr", ip)
+						query.UseIndex("remoteAddr")
 					}
 				} else {
 					query.Where("JSON_EXTRACT(content, '$.remoteAddr')=:ip1").
@@ -269,6 +269,7 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 							Param("host2", domain)
 					} else {
 						query.Attr("domain", domain)
+						query.UseIndex("domain")
 					}
 				} else {
 					query.Where("JSON_EXTRACT(content, '$.host')=:host1").
@@ -404,7 +405,7 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 
 // FindAccessLogWithRequestId 根据请求ID获取访问日志
 func (this *HTTPAccessLogDAO) FindAccessLogWithRequestId(tx *dbs.Tx, requestId string) (*HTTPAccessLog, error) {
-	if !regexp.MustCompile(`^\d{30,}`).MatchString(requestId) {
+	if !regexp.MustCompile(`^\d{11,}`).MatchString(requestId) {
 		return nil, errors.New("invalid requestId")
 	}
 

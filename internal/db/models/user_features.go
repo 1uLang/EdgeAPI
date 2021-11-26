@@ -312,7 +312,7 @@ var (
 	}
 )
 
-// 用户功能
+// UserFeature 用户功能
 type UserFeature struct {
 	Name        string `json:"name"`
 	Code        string `json:"code"`
@@ -320,16 +320,15 @@ type UserFeature struct {
 }
 
 func (this *UserFeature) ToPB() *pb.UserFeature {
-	features := &pb.UserFeature{Name: this.Name, Code: this.Code, Description: this.Description}
-	return features
+	return &pb.UserFeature{Name: this.Name, Code: this.Code, Description: this.Description}
 }
 
-// 所有功能列表
+// FindAllUserFeatures 所有功能列表
 func FindAllUserFeatures() []*UserFeature {
 	return allUserFeatures
 }
 
-// 查询单个功能
+// FindUserFeature 查询单个功能
 func FindUserFeature(code string) *UserFeature {
 	for _, feature := range allUserFeatures {
 		if feature.Code == code {

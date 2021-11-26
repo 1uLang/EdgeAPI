@@ -45,6 +45,5 @@ func (this *NSRecordHourlyStatService) UploadNSRecordHourlyStats(ctx context.Con
 		}
 	}
 
-
 	return this.Success()
 }

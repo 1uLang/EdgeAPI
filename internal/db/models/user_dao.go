@@ -55,15 +55,29 @@ func (this *UserDAO) DisableUser(tx *dbs.Tx, id int64) (rowsAffected int64, err 
 		Update()
 }
 
-// FindEnabledUser 查找启用中的条目
-func (this *UserDAO) FindEnabledUser(tx *dbs.Tx, id int64) (*User, error) {
+// FindEnabledUser 查找启用的用户
+func (this *UserDAO) FindEnabledUser(tx *dbs.Tx, userId int64, cacheMap *utils.CacheMap) (*User, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":FindEnabledUser:" + types.String(userId)
+	cache, ok := cacheMap.Get(cacheKey)
+	if ok {
+		return cache.(*User), nil
+	}
+
 	result, err := this.Query(tx).
-		Pk(id).
+		Pk(userId).
 		Attr("state", UserStateEnabled).
 		Find()
 	if result == nil {
 		return nil, err
 	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, result)
+	}
+
 	return result.(*User), err
 }
 
@@ -127,9 +141,7 @@ func (this *UserDAO) UpdateUser(tx *dbs.Tx, userId int64, username string, passw
 	op.Tel = tel
 	op.Email = email
 	op.Remark = remark
-	if nodeClusterId != 0 {
-		op.ClusterId = nodeClusterId
-	}
+	op.ClusterId = nodeClusterId
 	op.IsOn = isOn
 	err := this.Save(tx, op)
 	return err

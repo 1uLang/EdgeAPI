@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	_ "github.com/go-sql-driver/mysql"
@@ -76,7 +77,16 @@ func (this *HTTPRewriteRuleDAO) FindEnabledHTTPRewriteRule(tx *dbs.Tx, id int64)
 }
 
 // ComposeRewriteRule 构造配置
-func (this *HTTPRewriteRuleDAO) ComposeRewriteRule(tx *dbs.Tx, rewriteRuleId int64) (*serverconfigs.HTTPRewriteRule, error) {
+func (this *HTTPRewriteRuleDAO) ComposeRewriteRule(tx *dbs.Tx, rewriteRuleId int64, cacheMap *utils.CacheMap) (*serverconfigs.HTTPRewriteRule, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":config:" + types.String(rewriteRuleId)
+	var cache, _ = cacheMap.Get(cacheKey)
+	if cache != nil {
+		return cache.(*serverconfigs.HTTPRewriteRule), nil
+	}
+
 	rule, err := this.FindEnabledHTTPRewriteRule(tx, rewriteRuleId)
 	if err != nil {
 		return nil, err
@@ -105,6 +115,11 @@ func (this *HTTPRewriteRuleDAO) ComposeRewriteRule(tx *dbs.Tx, rewriteRuleId int
 		}
 		config.Conds = conds
 	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, config)
+	}
+
 	return config, nil
 }
 

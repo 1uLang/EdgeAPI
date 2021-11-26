@@ -13,7 +13,6 @@ import (
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/maps"
 	"google.golang.org/grpc/metadata"
-	"time"
 )
 
 type UserType = string
@@ -31,6 +30,7 @@ const (
 	UserTypeLog       = "log"
 	UserTypeAPI       = "api"
 	UserTypeAuthority = "authority"
+	UserTypeReport    = "report"
 )
 
 // ValidateRequest 校验请求
@@ -124,12 +124,6 @@ func ValidateRequest(ctx context.Context, userTypes ...UserType) (userType UserT
 		return UserTypeNone, 0, 0, errors.New("decode token error: " + err.Error())
 	}
 
-	timestamp := m.GetInt64("timestamp")
-	if time.Now().Unix()-timestamp > 600 {
-		// 请求超过10分钟认为超时
-		return UserTypeNone, 0, 0, errors.New("authenticate timeout, please check your system clock")
-	}
-
 	t := m.GetString("type")
 	if len(userTypes) > 0 && !lists.ContainsString(userTypes, t) {
 		return UserTypeNone, 0, 0, errors.New("not supported node type: '" + t + "'")
@@ -160,38 +154,48 @@ func ValidateRequest(ctx context.Context, userTypes ...UserType) (userType UserT
 	case UserTypeUser:
 		nodeIntId, err := models.SharedUserNodeDAO.FindEnabledUserNodeIdWithUniqueId(nil, nodeId)
 		if err != nil {
-			return UserTypeNode, 0, 0, errors.New("context: " + err.Error())
+			return UserTypeUser, 0, 0, errors.New("context: " + err.Error())
 		}
 		if nodeIntId <= 0 {
-			return UserTypeNode, 0, 0, errors.New("context: not found node with id '" + nodeId + "'")
+			return UserTypeUser, 0, 0, errors.New("context: not found node with id '" + nodeId + "'")
 		}
 		resultNodeId = nodeIntId
 	case UserTypeMonitor:
 		nodeIntId, err := models.SharedMonitorNodeDAO.FindEnabledMonitorNodeIdWithUniqueId(nil, nodeId)
 		if err != nil {
-			return UserTypeNode, 0, 0, errors.New("context: " + err.Error())
+			return UserTypeMonitor, 0, 0, errors.New("context: " + err.Error())
 		}
 		if nodeIntId <= 0 {
-			return UserTypeNode, 0, 0, errors.New("context: not found node with id '" + nodeId + "'")
+			return UserTypeMonitor, 0, 0, errors.New("context: not found node with id '" + nodeId + "'")
 		}
 		resultNodeId = nodeIntId
 	case UserTypeAuthority:
 		nodeIntId, err := authority.SharedAuthorityNodeDAO.FindEnabledAuthorityNodeIdWithUniqueId(nil, nodeId)
 		if err != nil {
-			return UserTypeNode, 0, 0, errors.New("context: " + err.Error())
+			return UserTypeAuthority, 0, 0, errors.New("context: " + err.Error())
 		}
 		if nodeIntId <= 0 {
-			return UserTypeNode, 0, 0, errors.New("context: not found node with id '" + nodeId + "'")
+			return UserTypeAuthority, 0, 0, errors.New("context: not found node with id '" + nodeId + "'")
 		}
 		nodeUserId = nodeIntId
 		resultNodeId = nodeIntId
 	case UserTypeDNS:
 		nodeIntId, err := models.SharedNSNodeDAO.FindEnabledNodeIdWithUniqueId(nil, nodeId)
 		if err != nil {
-			return UserTypeNode, nodeIntId, 0, errors.New("context: " + err.Error())
+			return UserTypeDNS, nodeIntId, 0, errors.New("context: " + err.Error())
 		}
 		if nodeIntId <= 0 {
-			return UserTypeNode, nodeIntId, 0, errors.New("context: not found node with id '" + nodeId + "'")
+			return UserTypeDNS, nodeIntId, 0, errors.New("context: not found node with id '" + nodeId + "'")
+		}
+		nodeUserId = nodeIntId
+		resultNodeId = nodeIntId
+	case UserTypeReport:
+		nodeIntId, err := models.SharedReportNodeDAO.FindEnabledNodeIdWithUniqueId(nil, nodeId)
+		if err != nil {
+			return UserTypeReport, nodeIntId, 0, errors.New("context: " + err.Error())
+		}
+		if nodeIntId <= 0 {
+			return UserTypeReport, nodeIntId, 0, errors.New("context: not found node with id '" + nodeId + "'")
 		}
 		nodeUserId = nodeIntId
 		resultNodeId = nodeIntId

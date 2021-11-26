@@ -8,6 +8,8 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/regions"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/messageconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/iwind/TeaGo/maps"
@@ -60,6 +62,24 @@ func (this *ServerService) CreateServer(ctx context.Context, req *pb.CreateServe
 				}
 			}
 		}
+
+		// 集群
+		nodeClusterId, err := models.SharedUserDAO.FindUserClusterId(tx, userId)
+		if err != nil {
+			return nil, err
+		}
+		if nodeClusterId > 0 {
+			req.NodeClusterId = nodeClusterId
+		}
+	} else if req.UserId > 0 {
+		// 集群
+		nodeClusterId, err := models.SharedUserDAO.FindUserClusterId(tx, req.UserId)
+		if err != nil {
+			return nil, err
+		}
+		if nodeClusterId > 0 {
+			req.NodeClusterId = nodeClusterId
+		}
 	}
 
 	// 是否需要审核
@@ -81,7 +101,45 @@ func (this *ServerService) CreateServer(ctx context.Context, req *pb.CreateServe
 		}
 	}
 
-	serverId, err := models.SharedServerDAO.CreateServer(tx, req.AdminId, req.UserId, req.Type, req.Name, req.Description, serverNamesJSON, isAuditing, auditingServerNamesJSON, string(req.HttpJSON), string(req.HttpsJSON), string(req.TcpJSON), string(req.TlsJSON), string(req.UnixJSON), string(req.UdpJSON), req.WebId, req.ReverseProxyJSON, req.NodeClusterId, string(req.IncludeNodesJSON), string(req.ExcludeNodesJSON), req.ServerGroupIds)
+	// 检查用户套餐
+	if req.UserPlanId > 0 {
+		userPlan, err := models.SharedUserPlanDAO.FindEnabledUserPlan(tx, req.UserPlanId, nil)
+		if err != nil {
+			return nil, err
+		}
+		if userPlan == nil {
+			return nil, errors.New("can not find user plan with id '" + types.String(req.UserPlanId) + "'")
+		}
+		if userId > 0 && int64(userPlan.UserId) != userId {
+			return nil, errors.New("invalid user plan")
+		}
+		if req.UserId > 0 && int64(userPlan.UserId) != req.UserId {
+			return nil, errors.New("invalid user plan")
+		}
+
+		// 套餐
+		plan, err := models.SharedPlanDAO.FindEnabledPlan(tx, int64(userPlan.PlanId))
+		if err != nil {
+			return nil, err
+		}
+		if plan == nil {
+			return nil, errors.New("invalid plan: " + types.String(userPlan.PlanId))
+		}
+		if plan.ClusterId > 0 {
+			req.NodeClusterId = int64(plan.ClusterId)
+		}
+
+		// 检查是否已经被别的服务所占用
+		planServerId, err := models.SharedServerDAO.FindEnabledServerIdWithUserPlanId(tx, req.UserPlanId)
+		if err != nil {
+			return nil, err
+		}
+		if planServerId > 0 {
+			return nil, errors.New("the user plan is used by another server '" + types.String(planServerId) + "'")
+		}
+	}
+
+	serverId, err := models.SharedServerDAO.CreateServer(tx, req.AdminId, req.UserId, req.Type, req.Name, req.Description, serverNamesJSON, isAuditing, auditingServerNamesJSON, string(req.HttpJSON), string(req.HttpsJSON), string(req.TcpJSON), string(req.TlsJSON), string(req.UnixJSON), string(req.UdpJSON), req.WebId, req.ReverseProxyJSON, req.NodeClusterId, string(req.IncludeNodesJSON), string(req.ExcludeNodesJSON), req.ServerGroupIds, req.UserPlanId)
 	if err != nil {
 		return nil, err
 	}
@@ -272,9 +330,16 @@ func (this *ServerService) UpdateServerUnix(ctx context.Context, req *pb.UpdateS
 // UpdateServerUDP 修改UDP服务
 func (this *ServerService) UpdateServerUDP(ctx context.Context, req *pb.UpdateServerUDPRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
 	if err != nil {
 		return nil, err
+	}
+
+	if userId > 0 {
+		err = models.SharedServerDAO.CheckUserServer(nil, userId, req.ServerId)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if req.ServerId <= 0 {
@@ -468,6 +533,37 @@ func (this *ServerService) UpdateServerNamesAuditing(ctx context.Context, req *p
 	return this.Success()
 }
 
+// UpdateServerDNS 修改服务的DNS相关设置
+func (this *ServerService) UpdateServerDNS(ctx context.Context, req *pb.UpdateServerDNSRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	err = models.SharedServerDAO.UpdateServerDNS(tx, req.ServerId, req.SupportCNAME)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
+}
+
+// RegenerateServerCNAME 重新生成CNAME
+func (this *ServerService) RegenerateServerCNAME(ctx context.Context, req *pb.RegenerateServerCNAMERequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	_, err = models.SharedServerDAO.GenerateServerDNSName(tx, req.ServerId)
+	if err != nil {
+		return nil, err
+	}
+	return this.Success()
+}
+
 // CountAllEnabledServersMatch 计算服务数量
 func (this *ServerService) CountAllEnabledServersMatch(ctx context.Context, req *pb.CountAllEnabledServersMatchRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
@@ -478,7 +574,7 @@ func (this *ServerService) CountAllEnabledServersMatch(ctx context.Context, req 
 
 	tx := this.NullTx()
 
-	count, err := models.SharedServerDAO.CountAllEnabledServersMatch(tx, req.ServerGroupId, req.Keyword, req.UserId, req.NodeClusterId, types.Int8(req.AuditingFlag), req.ProtocolFamily)
+	count, err := models.SharedServerDAO.CountAllEnabledServersMatch(tx, req.ServerGroupId, req.Keyword, req.UserId, req.NodeClusterId, types.Int8(req.AuditingFlag), utils.SplitStrings(req.ProtocolFamily, ","))
 	if err != nil {
 		return nil, err
 	}
@@ -496,7 +592,7 @@ func (this *ServerService) ListEnabledServersMatch(ctx context.Context, req *pb.
 
 	tx := this.NullTx()
 
-	servers, err := models.SharedServerDAO.ListEnabledServersMatch(tx, req.Offset, req.Size, req.ServerGroupId, req.Keyword, req.UserId, req.NodeClusterId, req.AuditingFlag, req.ProtocolFamily)
+	servers, err := models.SharedServerDAO.ListEnabledServersMatch(tx, req.Offset, req.Size, req.ServerGroupId, req.Keyword, req.UserId, req.NodeClusterId, req.AuditingFlag, utils.SplitStrings(req.ProtocolFamily, ","))
 	if err != nil {
 		return nil, err
 	}
@@ -554,11 +650,21 @@ func (this *ServerService) ListEnabledServersMatch(ctx context.Context, req *pb.
 			auditingResult.IsOk = true
 		}
 
+		// 配置
+		config, err := models.SharedServerDAO.ComposeServerConfig(tx, server, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		configJSON, err := json.Marshal(config)
+		if err != nil {
+			return nil, err
+		}
+
 		result = append(result, &pb.Server{
 			Id:                      int64(server.Id),
 			IsOn:                    server.IsOn == 1,
 			Type:                    server.Type,
-			Config:                  []byte(server.Config),
+			Config:                  configJSON,
 			Name:                    server.Name,
 			Description:             server.Description,
 			HttpJSON:                []byte(server.Http),
@@ -685,14 +791,27 @@ func (this *ServerService) FindEnabledServer(ctx context.Context, req *pb.FindEn
 		}
 	}
 
+	// 配置
+	config, err := models.SharedServerDAO.ComposeServerConfig(tx, server, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+
 	return &pb.FindEnabledServerResponse{Server: &pb.Server{
-		Id:               int64(server.Id),
-		IsOn:             server.IsOn == 1,
-		Type:             server.Type,
-		Name:             server.Name,
-		Description:      server.Description,
-		DnsName:          server.DnsName,
-		Config:           []byte(server.Config),
+		Id:           int64(server.Id),
+		IsOn:         server.IsOn == 1,
+		Type:         server.Type,
+		Name:         server.Name,
+		Description:  server.Description,
+		DnsName:      server.DnsName,
+		SupportCNAME: server.SupportCNAME == 1,
+		UserPlanId:   int64(server.UserPlanId),
+
+		Config:           configJSON,
 		ServerNamesJSON:  []byte(server.ServerNames),
 		HttpJSON:         []byte(server.Http),
 		HttpsJSON:        []byte(server.Https),
@@ -733,7 +852,7 @@ func (this *ServerService) FindEnabledServerConfig(ctx context.Context, req *pb.
 		}
 	}
 
-	config, err := models.SharedServerDAO.ComposeServerConfigWithServerId(tx, req.ServerId)
+	config, err := models.SharedServerDAO.ComposeServerConfigWithServerId(tx, req.ServerId, false)
 	if err != nil {
 		return nil, err
 	}
@@ -809,7 +928,7 @@ func (this *ServerService) FindAndInitServerReverseProxyConfig(ctx context.Conte
 		}
 	}
 
-	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId)
+	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -856,7 +975,7 @@ func (this *ServerService) FindAndInitServerWebConfig(ctx context.Context, req *
 		}
 	}
 
-	config, err := models.SharedHTTPWebDAO.ComposeWebConfig(tx, webId)
+	config, err := models.SharedHTTPWebDAO.ComposeWebConfig(tx, webId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1045,20 +1164,25 @@ func (this *ServerService) FindEnabledServerDNS(ctx context.Context, req *pb.Fin
 		return nil, err
 	}
 
+	supportCNAME, err := models.SharedServerDAO.FindServerSupportCNAME(tx, req.ServerId)
+	if err != nil {
+		return nil, err
+	}
+
 	clusterId, err := models.SharedServerDAO.FindServerClusterId(tx, req.ServerId)
 	if err != nil {
 		return nil, err
 	}
 	var pbDomain *pb.DNSDomain = nil
 	if clusterId > 0 {
-		clusterDNS, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, clusterId)
+		clusterDNS, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, clusterId, nil)
 		if err != nil {
 			return nil, err
 		}
 		if clusterDNS != nil {
 			domainId := int64(clusterDNS.DnsDomainId)
 			if domainId > 0 {
-				domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, domainId)
+				domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, domainId, nil)
 				if err != nil {
 					return nil, err
 				}
@@ -1073,8 +1197,9 @@ func (this *ServerService) FindEnabledServerDNS(ctx context.Context, req *pb.Fin
 	}
 
 	return &pb.FindEnabledServerDNSResponse{
-		DnsName: dnsName,
-		Domain:  pbDomain,
+		DnsName:      dnsName,
+		Domain:       pbDomain,
+		SupportCNAME: supportCNAME,
 	}, nil
 }
 
@@ -1413,4 +1538,289 @@ func (this *ServerService) FindLatestServers(ctx context.Context, req *pb.FindLa
 		})
 	}
 	return &pb.FindLatestServersResponse{Servers: pbServers}, nil
+}
+
+// FindNearbyServers 查找某个服务附近的服务
+func (this *ServerService) FindNearbyServers(ctx context.Context, req *pb.FindNearbyServersRequest) (*pb.FindNearbyServersResponse, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+
+	// 查询服务的Group
+	groupIds, err := models.SharedServerDAO.FindServerGroupIds(tx, req.ServerId)
+	if err != nil {
+		return nil, err
+	}
+	if len(groupIds) > 0 {
+		var pbGroups = []*pb.FindNearbyServersResponse_GroupInfo{}
+		for _, groupId := range groupIds {
+			group, err := models.SharedServerGroupDAO.FindEnabledServerGroup(tx, groupId)
+			if err != nil {
+				return nil, err
+			}
+			if group == nil {
+				continue
+			}
+
+			var pbGroup = &pb.FindNearbyServersResponse_GroupInfo{
+				Name: group.Name,
+			}
+			servers, err := models.SharedServerDAO.FindNearbyServersInGroup(tx, groupId, req.ServerId, 10)
+			if err != nil {
+				return nil, err
+			}
+			for _, server := range servers {
+				pbGroup.Servers = append(pbGroup.Servers, &pb.Server{
+					Id:   int64(server.Id),
+					Name: server.Name,
+					IsOn: server.IsOn == 1,
+				})
+			}
+			pbGroups = append(pbGroups, pbGroup)
+		}
+
+		if len(pbGroups) > 0 {
+			return &pb.FindNearbyServersResponse{
+				Scope:  "group",
+				Groups: pbGroups,
+			}, nil
+		}
+	}
+
+	// 集群
+	clusterId, err := models.SharedServerDAO.FindServerClusterId(tx, req.ServerId)
+	if err != nil {
+		return nil, err
+	}
+	servers, err := models.SharedServerDAO.FindNearbyServersInCluster(tx, clusterId, req.ServerId, 10)
+	if err != nil {
+		return nil, err
+	}
+	if len(servers) == 0 {
+		return &pb.FindNearbyServersResponse{
+			Scope:  "cluster",
+			Groups: nil,
+		}, nil
+	}
+
+	clusterName, err := models.SharedNodeClusterDAO.FindNodeClusterName(tx, clusterId)
+	if err != nil {
+		return nil, err
+	}
+	var pbGroup = &pb.FindNearbyServersResponse_GroupInfo{
+		Name: clusterName,
+	}
+	for _, server := range servers {
+		pbGroup.Servers = append(pbGroup.Servers, &pb.Server{
+			Id:   int64(server.Id),
+			Name: server.Name,
+			IsOn: server.IsOn == 1,
+		})
+	}
+
+	return &pb.FindNearbyServersResponse{
+		Scope:  "cluster",
+		Groups: []*pb.FindNearbyServersResponse_GroupInfo{pbGroup},
+	}, nil
+}
+
+// PurgeServerCache 清除缓存
+func (this *ServerService) PurgeServerCache(ctx context.Context, req *pb.PurgeServerCacheRequest) (*pb.PurgeServerCacheResponse, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		// 检查是否为节点
+		_, err = this.ValidateNode(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if len(req.Domains) == 0 {
+		return nil, errors.New("'domains' field is required")
+	}
+
+	if len(req.Keys) == 0 && len(req.Prefixes) == 0 {
+		return &pb.PurgeServerCacheResponse{IsOk: true}, nil
+	}
+
+	var tx = this.NullTx()
+	var cacheMap = utils.NewCacheMap()
+	var purgeResponse = &pb.PurgeServerCacheResponse{}
+
+	for _, domain := range req.Domains {
+		servers, err := models.SharedServerDAO.FindAllEnabledServersWithDomain(tx, domain)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, server := range servers {
+			clusterId := int64(server.ClusterId)
+			if clusterId > 0 {
+				nodeIds, err := models.SharedNodeDAO.FindAllEnabledNodeIdsWithClusterId(tx, clusterId)
+				if err != nil {
+					return nil, err
+				}
+
+				cachePolicyId, err := models.SharedNodeClusterDAO.FindClusterHTTPCachePolicyId(tx, clusterId, cacheMap)
+				if err != nil {
+					return nil, err
+				}
+				if cachePolicyId == 0 {
+					continue
+				}
+
+				cachePolicy, err := models.SharedHTTPCachePolicyDAO.ComposeCachePolicy(tx, cachePolicyId, cacheMap)
+				if err != nil {
+					return nil, err
+				}
+				if cachePolicy == nil {
+					continue
+				}
+				cachePolicyJSON, err := json.Marshal(cachePolicy)
+				if err != nil {
+					return nil, err
+				}
+
+				for _, nodeId := range nodeIds {
+					msg := &messageconfigs.PurgeCacheMessage{
+						CachePolicyJSON: cachePolicyJSON,
+					}
+					if len(req.Prefixes) > 0 {
+						msg.Type = messageconfigs.PurgeCacheMessageTypeDir
+						msg.Keys = req.Prefixes
+					} else {
+						msg.Type = messageconfigs.PurgeCacheMessageTypeFile
+						msg.Keys = req.Keys
+					}
+					msgJSON, err := json.Marshal(msg)
+					if err != nil {
+						return nil, err
+					}
+
+					resp, err := SendCommandToNode(nodeId, NextCommandRequestId(), messageconfigs.MessageCodePurgeCache, msgJSON, 10, false)
+					if err != nil {
+						return nil, err
+					}
+					if !resp.IsOk {
+						purgeResponse.IsOk = false
+						purgeResponse.Message = resp.Message
+						return purgeResponse, nil
+					}
+				}
+			}
+		}
+	}
+
+	purgeResponse.IsOk = true
+
+	return purgeResponse, nil
+}
+
+// FindEnabledServerTrafficLimit 查找流量限制
+func (this *ServerService) FindEnabledServerTrafficLimit(ctx context.Context, req *pb.FindEnabledServerTrafficLimitRequest) (*pb.FindEnabledServerTrafficLimitResponse, error) {
+	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO 检查用户权限
+
+	var tx = this.NullTx()
+	limitConfig, err := models.SharedServerDAO.FindServerTrafficLimitConfig(tx, req.ServerId, nil)
+	if err != nil {
+		return nil, err
+	}
+	limitConfigJSON, err := json.Marshal(limitConfig)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.FindEnabledServerTrafficLimitResponse{
+		TrafficLimitJSON: limitConfigJSON,
+	}, nil
+}
+
+// UpdateServerTrafficLimit 设置流量限制
+func (this *ServerService) UpdateServerTrafficLimit(ctx context.Context, req *pb.UpdateServerTrafficLimitRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	var config = &serverconfigs.TrafficLimitConfig{}
+	err = json.Unmarshal(req.TrafficLimitJSON, config)
+	if err != nil {
+		return nil, err
+	}
+
+	err = models.SharedServerDAO.UpdateServerTrafficLimitConfig(tx, req.ServerId, config)
+	if err != nil {
+		return nil, err
+	}
+	return this.Success()
+}
+
+// UpdateServerUserPlan 修改服务套餐
+func (this *ServerService) UpdateServerUserPlan(ctx context.Context, req *pb.UpdateServerUserPlanRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+
+	// TODO 支持用户调用
+
+	// 检查套餐
+	if req.UserPlanId < 0 {
+		req.UserPlanId = 0
+	}
+	if req.UserPlanId > 0 {
+		userId, err := models.SharedServerDAO.FindServerUserId(tx, req.ServerId)
+		if err != nil {
+			return nil, err
+		}
+		if userId == 0 {
+			return nil, errors.New("the server is not belong to any user")
+		}
+
+		userPlan, err := models.SharedUserPlanDAO.FindEnabledUserPlan(tx, req.UserPlanId, nil)
+		if err != nil {
+			return nil, err
+		}
+		if userPlan == nil {
+			return nil, errors.New("can not find user plan with id '" + types.String(req.UserPlanId) + "'")
+		}
+		if int64(userPlan.UserId) != userId {
+			return nil, errors.New("can not find user plan with id '" + types.String(req.UserPlanId) + "'")
+		}
+
+		// 检查是否已经被别的服务所使用
+		serverId, err := models.SharedServerDAO.FindEnabledServerIdWithUserPlanId(tx, req.UserPlanId)
+		if err != nil {
+			return nil, err
+		}
+		if serverId > 0 && serverId != req.ServerId {
+			return nil, errors.New("the user plan is used by other server")
+		}
+	}
+
+	// 检查是否有变化
+	oldUserPlanId, err := models.SharedServerDAO.FindServerUserPlanId(tx, req.ServerId)
+	if err != nil {
+		return nil, err
+	}
+	if req.UserPlanId == oldUserPlanId {
+		return this.Success()
+	}
+
+	err = models.SharedServerDAO.UpdateServerUserPlanId(tx, req.ServerId, req.UserPlanId)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
 }

@@ -7,7 +7,9 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/firewallconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
@@ -44,6 +46,18 @@ var upgradeFuncs = []*upgradeVersion{
 	},
 	{
 		"0.2.8.1", upgradeV0_2_8_1,
+	},
+	{
+		"0.3.0", upgradeV0_3_0,
+	},
+	{
+		"0.3.1", upgradeV0_3_1,
+	},
+	{
+		"0.3.2", upgradeV0_3_2,
+	},
+	{
+		"0.3.3", upgradeV0_3_3,
 	},
 }
 
@@ -320,6 +334,200 @@ func upgradeV0_2_8_1(db *dbs.DB) error {
 				return err
 			}
 		}
+	}
+
+	return nil
+}
+
+// v0.3.0
+func upgradeV0_3_0(db *dbs.DB) error {
+	// 升级健康检查
+	ones, _, err := db.FindOnes("SELECT id,healthCheck FROM edgeNodeClusters WHERE state=1")
+	if err != nil {
+		return err
+	}
+	for _, one := range ones {
+		var clusterId = one.GetInt64("id")
+		var healthCheck = one.GetString("healthCheck")
+		if len(healthCheck) == 0 {
+			continue
+		}
+		var config = &serverconfigs.HealthCheckConfig{}
+		err = json.Unmarshal([]byte(healthCheck), config)
+		if err != nil {
+			continue
+		}
+		if config.CountDown <= 1 {
+			config.CountDown = 3
+			configJSON, err := json.Marshal(config)
+			if err != nil {
+				continue
+			}
+			_, err = db.Exec("UPDATE edgeNodeClusters SET healthCheck=? WHERE id=?", string(configJSON), clusterId)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// v0.3.1
+func upgradeV0_3_1(db *dbs.DB) error {
+	// 清空域名统计，已使用分表代替
+	// 因为可能有权限问题，所以我们忽略错误
+	_, _ = db.Exec("TRUNCATE table edgeServerDomainHourlyStats")
+
+	// 升级APIToken
+	ones, _, err := db.FindOnes("SELECT uniqueId,secret FROM edgeNodeClusters")
+	if err != nil {
+		return err
+	}
+	for _, one := range ones {
+		var uniqueId = one.GetString("uniqueId")
+		var secret = one.GetString("secret")
+		tokenOne, err := db.FindOne("SELECT id FROM edgeAPITokens WHERE nodeId=? LIMIT 1", uniqueId)
+		if err != nil {
+			return err
+		}
+		if len(tokenOne) == 0 {
+			_, err = db.Exec("INSERT INTO edgeAPITokens (nodeId, secret, role, state) VALUES (?, ?, 'cluster', 1)", uniqueId, secret)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// v0.3.2
+func upgradeV0_3_2(db *dbs.DB) error {
+	// gzip => compression
+
+	type HTTPGzipRef struct {
+		IsPrior bool  `yaml:"isPrior" json:"isPrior"` // 是否覆盖
+		IsOn    bool  `yaml:"isOn" json:"isOn"`       // 是否开启
+		GzipId  int64 `yaml:"gzipId" json:"gzipId"`   // 使用的配置ID
+	}
+
+	webOnes, _, err := db.FindOnes("SELECT id, gzip FROM edgeHTTPWebs WHERE gzip IS NOT NULL AND compression IS NULL")
+	if err != nil {
+		return err
+	}
+	for _, webOne := range webOnes {
+		var gzipRef = &HTTPGzipRef{}
+		err = json.Unmarshal([]byte(webOne.GetString("gzip")), gzipRef)
+		if err != nil {
+			continue
+		}
+		if gzipRef == nil || gzipRef.GzipId <= 0 {
+			continue
+		}
+		var webId = webOne.GetInt("id")
+
+		var compressionConfig = &serverconfigs.HTTPCompressionConfig{
+			UseDefaultTypes: true,
+		}
+		compressionConfig.IsPrior = gzipRef.IsPrior
+		compressionConfig.IsOn = gzipRef.IsOn
+
+		gzipOne, err := db.FindOne("SELECT * FROM edgeHTTPGzips WHERE id=?", gzipRef.GzipId)
+		if err != nil {
+			return err
+		}
+		if len(gzipOne) == 0 {
+			continue
+		}
+
+		level := gzipOne.GetInt("level")
+		if level <= 0 {
+			continue
+		}
+		if level > 0 && level <= 10 {
+			compressionConfig.Level = types.Int8(level)
+		} else if level > 10 {
+			compressionConfig.Level = 10
+		}
+
+		var minLengthBytes = []byte(gzipOne.GetString("minLength"))
+		if len(minLengthBytes) > 0 {
+			var sizeCapacity = &shared.SizeCapacity{}
+			err = json.Unmarshal(minLengthBytes, sizeCapacity)
+			if err != nil {
+				continue
+			}
+			if sizeCapacity != nil {
+				compressionConfig.MinLength = sizeCapacity
+			}
+		}
+
+		var maxLengthBytes = []byte(gzipOne.GetString("maxLength"))
+		if len(maxLengthBytes) > 0 {
+			var sizeCapacity = &shared.SizeCapacity{}
+			err = json.Unmarshal(maxLengthBytes, sizeCapacity)
+			if err != nil {
+				continue
+			}
+			if sizeCapacity != nil {
+				compressionConfig.MaxLength = sizeCapacity
+			}
+		}
+
+		var condsBytes = []byte(gzipOne.GetString("conds"))
+		if len(condsBytes) > 0 {
+			var conds = &shared.HTTPRequestCondsConfig{}
+			err = json.Unmarshal(condsBytes, conds)
+			if err != nil {
+				continue
+			}
+			if conds != nil {
+				compressionConfig.Conds = conds
+			}
+		}
+
+		configJSON, err := json.Marshal(compressionConfig)
+		if err != nil {
+			return err
+		}
+		_, err = db.Exec("UPDATE edgeHTTPWebs SET compression=? WHERE id=?", string(configJSON), webId)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 更新服务端口
+	var serverDAO = models.NewServerDAO()
+	ones, err := serverDAO.Query(nil).
+		ResultPk().
+		FindAll()
+	if err != nil {
+		return err
+	}
+	for _, one := range ones {
+		var serverId = int64(one.(*models.Server).Id)
+		err = serverDAO.NotifyServerPortsUpdate(nil, serverId)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// v0.3.3
+func upgradeV0_3_3(db *dbs.DB) error {
+	// 升级CC请求数Code
+	_, err := db.Exec("UPDATE edgeHTTPFirewallRuleSets SET code='8002' WHERE name='CC请求数' AND code='8001'")
+	if err != nil {
+		return err
+	}
+
+	// 清除节点
+	// 删除7天以前的info日志
+	err = models.NewNodeLogDAO().DeleteExpiredLogsWithLevel(nil, "info", 7)
+	if err != nil {
+		return err
 	}
 
 	return nil

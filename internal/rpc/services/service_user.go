@@ -163,7 +163,7 @@ func (this *UserService) FindEnabledUser(ctx context.Context, req *pb.FindEnable
 
 	tx := this.NullTx()
 
-	user, err := models.SharedUserDAO.FindEnabledUser(tx, req.UserId)
+	user, err := models.SharedUserDAO.FindEnabledUser(tx, req.UserId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +221,7 @@ func (this *UserService) CheckUserUsername(ctx context.Context, req *pb.CheckUse
 
 // LoginUser 登录
 func (this *UserService) LoginUser(ctx context.Context, req *pb.LoginUserRequest) (*pb.LoginUserResponse, error) {
-	_, _, _, err := rpcutils.ValidateRequest(ctx)
+	_, err := this.ValidateUserNode(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +310,7 @@ func (this *UserService) ComposeUserDashboard(ctx context.Context, req *pb.Compo
 	tx := this.NullTx()
 
 	// 网站数量
-	countServers, err := models.SharedServerDAO.CountAllEnabledServersMatch(tx, 0, "", req.UserId, 0, configutils.BoolStateAll, "")
+	countServers, err := models.SharedServerDAO.CountAllEnabledServersMatch(tx, 0, "", req.UserId, 0, configutils.BoolStateAll, []string{})
 	if err != nil {
 		return nil, err
 	}
@@ -496,7 +496,7 @@ func (this *UserService) ComposeUserGlobalBoard(ctx context.Context, req *pb.Com
 	result.CountUserNodes = countUserNodes
 
 	// 离线用户节点
-	countOfflineUserNodes, err := models.SharedUserNodeDAO.CountOfflineNodes(tx)
+	countOfflineUserNodes, err := models.SharedUserNodeDAO.CountAllEnabledAndOnOfflineNodes(tx)
 	if err != nil {
 		return nil, err
 	}

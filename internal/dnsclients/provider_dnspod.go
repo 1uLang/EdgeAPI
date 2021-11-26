@@ -13,6 +13,10 @@ import (
 	"strings"
 )
 
+const (
+	DNSPodMaxTTL int32 = 604800
+)
+
 // DNSPodProvider DNSPod服务商
 type DNSPodProvider struct {
 	BaseProvider
@@ -33,6 +37,40 @@ func (this *DNSPodProvider) Auth(params maps.Map) error {
 		return errors.New("'token' should not be empty")
 	}
 	return nil
+}
+
+// GetDomains 获取所有域名列表
+func (this *DNSPodProvider) GetDomains() (domains []string, err error) {
+	offset := 0
+	size := 100
+	for {
+		domainsResp, err := this.post("/Domain.list", map[string]string{
+			"offset": numberutils.FormatInt(offset),
+			"length": numberutils.FormatInt(size),
+		})
+		if err != nil {
+			return nil, err
+		}
+		offset += size
+
+		domainsSlice := domainsResp.GetSlice("domains")
+		if len(domainsSlice) == 0 {
+			break
+		}
+
+		for _, domain := range domainsSlice {
+			domainMap := maps.NewMap(domain)
+			domains = append(domains, domainMap.GetString("name"))
+		}
+
+		// 检查是否到头
+		info := domainsResp.GetMap("info")
+		recordTotal := info.GetInt("record_total")
+		if offset >= recordTotal {
+			break
+		}
+	}
+	return
 }
 
 // GetRecords 获取域名列表
@@ -60,6 +98,7 @@ func (this *DNSPodProvider) GetRecords(domain string) (records []*dnstypes.Recor
 				Type:  recordMap.GetString("type"),
 				Value: recordMap.GetString("value"),
 				Route: recordMap.GetString("line"),
+				TTL:   recordMap.GetInt32("ttl"),
 			})
 		}
 
@@ -131,13 +170,18 @@ func (this *DNSPodProvider) AddRecord(domain string, newRecord *dnstypes.Record)
 	if newRecord.Type == dnstypes.RecordTypeCNAME && !strings.HasSuffix(newRecord.Value, ".") {
 		newRecord.Value += "."
 	}
-	_, err := this.post("/Record.Create", map[string]string{
+
+	var args = map[string]string{
 		"domain":      domain,
 		"sub_domain":  newRecord.Name,
 		"record_type": newRecord.Type,
 		"value":       newRecord.Value,
 		"record_line": newRecord.Route,
-	})
+	}
+	if newRecord.TTL > 0 && newRecord.TTL <= DNSPodMaxTTL {
+		args["ttl"] = types.String(newRecord.TTL)
+	}
+	_, err := this.post("/Record.Create", args)
 	return err
 }
 
@@ -154,14 +198,19 @@ func (this *DNSPodProvider) UpdateRecord(domain string, record *dnstypes.Record,
 	if newRecord.Type == dnstypes.RecordTypeCNAME && !strings.HasSuffix(newRecord.Value, ".") {
 		newRecord.Value += "."
 	}
-	_, err := this.post("/Record.Modify", map[string]string{
+
+	var args = map[string]string{
 		"domain":      domain,
 		"record_id":   record.Id,
 		"sub_domain":  newRecord.Name,
 		"record_type": newRecord.Type,
 		"value":       newRecord.Value,
 		"record_line": newRecord.Route,
-	})
+	}
+	if newRecord.TTL > 0 && newRecord.TTL <= DNSPodMaxTTL {
+		args["ttl"] = types.String(newRecord.TTL)
+	}
+	_, err := this.post("/Record.Modify", args)
 	return err
 }
 

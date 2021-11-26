@@ -7,6 +7,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/stats"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/types"
 	timeutil "github.com/iwind/TeaGo/utils/time"
@@ -175,6 +176,45 @@ func (this *FirewallService) ComposeFirewallGlobalBoard(ctx context.Context, req
 		})
 	}
 
+	// 节点排行
+	topNodeStats, err := stats.SharedNodeTrafficHourlyStatDAO.FindTopNodeStatsWithAttack(tx, "node", hourFrom, hourTo, 10)
+	if err != nil {
+		return nil, err
+	}
+	for _, stat := range topNodeStats {
+		nodeName, err := models.SharedNodeDAO.FindNodeName(tx, int64(stat.NodeId))
+		if err != nil {
+			return nil, err
+		}
+		if len(nodeName) == 0 {
+			continue
+		}
+		result.TopNodeStats = append(result.TopNodeStats, &pb.ComposeFirewallGlobalBoardResponse_NodeStat{
+			NodeId:              int64(stat.NodeId),
+			NodeName:            nodeName,
+			CountRequests:       int64(stat.CountRequests),
+			Bytes:               int64(stat.Bytes),
+			CountAttackRequests: int64(stat.CountAttackRequests),
+			AttackBytes:         int64(stat.AttackBytes),
+		})
+	}
+
+	// 域名排行
+	topDomainStats, err := stats.SharedServerDomainHourlyStatDAO.FindTopDomainStatsWithAttack(tx, hourFrom, hourTo, 10)
+	if err != nil {
+		return nil, err
+	}
+	for _, stat := range topDomainStats {
+		result.TopDomainStats = append(result.TopDomainStats, &pb.ComposeFirewallGlobalBoardResponse_DomainStat{
+			ServerId:            int64(stat.ServerId),
+			Domain:              stat.Domain,
+			CountRequests:       int64(stat.CountRequests),
+			Bytes:               int64(stat.Bytes),
+			CountAttackRequests: int64(stat.CountAttackRequests),
+			AttackBytes:         int64(stat.AttackBytes),
+		})
+	}
+
 	return result, nil
 }
 
@@ -224,11 +264,7 @@ func (this *FirewallService) NotifyHTTPFirewallEvent(ctx context.Context, req *p
 		"\n规则分组：" + ruleGroupName +
 		"\n规则集：" + ruleSetName +
 		"\n时间：" + timeutil.FormatTime("Y-m-d H:i:s", req.CreatedAt)
-	err = models.SharedMessageTaskDAO.CreateMessageTasks(tx, models.MessageTaskTarget{
-		ClusterId: clusterId,
-		NodeId:    nodeId,
-		ServerId:  req.ServerId,
-	}, models.MessageTypeFirewallEvent, "发生防火墙事件", msg)
+	err = models.SharedMessageTaskDAO.CreateMessageTasks(tx, nodeconfigs.NodeRoleNode, clusterId, nodeId, req.ServerId, models.MessageTypeFirewallEvent, "触发防火墙事件", msg)
 	if err != nil {
 		return nil, err
 	}

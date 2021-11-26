@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
+	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns/dnsutils"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients/dnstypes"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
@@ -12,6 +13,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/maps"
 	"net"
@@ -120,7 +122,24 @@ func (this *DNSDomainService) DeleteDNSDomain(ctx context.Context, req *pb.Delet
 
 	tx := this.NullTx()
 
-	err = dns.SharedDNSDomainDAO.DisableDNSDomain(tx, req.DnsDomainId)
+	err = dns.SharedDNSDomainDAO.UpdateDomainIsDeleted(tx, req.DnsDomainId, true)
+	if err != nil {
+		return nil, err
+	}
+	return this.Success()
+}
+
+// RecoverDNSDomain 恢复删除的域名
+func (this *DNSDomainService) RecoverDNSDomain(ctx context.Context, req *pb.RecoverDNSDomainRequest) (*pb.RPCSuccess, error) {
+	// 校验请求
+	_, err := this.ValidateAdmin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	tx := this.NullTx()
+
+	err = dns.SharedDNSDomainDAO.UpdateDomainIsDeleted(tx, req.DnsDomainId, false)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +156,7 @@ func (this *DNSDomainService) FindEnabledDNSDomain(ctx context.Context, req *pb.
 
 	tx := this.NullTx()
 
-	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, req.DnsDomainId)
+	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, req.DnsDomainId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +164,7 @@ func (this *DNSDomainService) FindEnabledDNSDomain(ctx context.Context, req *pb.
 		return &pb.FindEnabledDNSDomainResponse{DnsDomain: nil}, nil
 	}
 
-	pbDomain, err := this.convertDomainToPB(domain)
+	pbDomain, err := this.convertDomainToPB(tx, domain)
 	return &pb.FindEnabledDNSDomainResponse{DnsDomain: pbDomain}, nil
 }
 
@@ -159,7 +178,7 @@ func (this *DNSDomainService) FindEnabledBasicDNSDomain(ctx context.Context, req
 
 	tx := this.NullTx()
 
-	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, req.DnsDomainId)
+	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, req.DnsDomainId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +228,7 @@ func (this *DNSDomainService) FindAllEnabledDNSDomainsWithDNSProviderId(ctx cont
 
 	result := []*pb.DNSDomain{}
 	for _, domain := range domains {
-		pbDomain, err := this.convertDomainToPB(domain)
+		pbDomain, err := this.convertDomainToPB(tx, domain)
 		if err != nil {
 			return nil, err
 		}
@@ -237,9 +256,11 @@ func (this *DNSDomainService) FindAllEnabledBasicDNSDomainsWithDNSProviderId(ctx
 	result := []*pb.DNSDomain{}
 	for _, domain := range domains {
 		result = append(result, &pb.DNSDomain{
-			Id:   int64(domain.Id),
-			Name: domain.Name,
-			IsOn: domain.IsOn == 1,
+			Id:        int64(domain.Id),
+			Name:      domain.Name,
+			IsOn:      domain.IsOn == 1,
+			IsUp:      domain.IsUp == 1,
+			IsDeleted: domain.IsDeleted == 1,
 		})
 	}
 
@@ -300,8 +321,13 @@ func (this *DNSDomainService) ExistAvailableDomains(ctx context.Context, req *pb
 }
 
 // 转换域名信息
-func (this *DNSDomainService) convertDomainToPB(domain *dns.DNSDomain) (*pb.DNSDomain, error) {
+func (this *DNSDomainService) convertDomainToPB(tx *dbs.Tx, domain *dns.DNSDomain) (*pb.DNSDomain, error) {
 	domainId := int64(domain.Id)
+
+	defaultRoute, err := dnsutils.FindDefaultDomainRoute(tx, domain)
+	if err != nil {
+		return nil, err
+	}
 
 	records := []*dnstypes.Record{}
 	if len(domain.Records) > 0 && domain.Records != "null" {
@@ -319,8 +345,6 @@ func (this *DNSDomainService) convertDomainToPB(domain *dns.DNSDomain) (*pb.DNSD
 	countServerRecords := 0
 	serversChanged := false
 
-	tx := this.NullTx()
-
 	// 检查是否所有的集群都已经被解析
 	clusters, err := models.SharedNodeClusterDAO.FindAllEnabledClustersWithDNSDomainId(tx, domainId)
 	if err != nil {
@@ -330,7 +354,8 @@ func (this *DNSDomainService) convertDomainToPB(domain *dns.DNSDomain) (*pb.DNSD
 	countAllNodes1 := int64(0)
 	countAllServers1 := int64(0)
 	for _, cluster := range clusters {
-		_, nodeRecords, serverRecords, countAllNodes, countAllServers, nodesChanged2, serversChanged2, err := this.findClusterDNSChanges(cluster, records, domain.Name)
+
+		_, nodeRecords, serverRecords, countAllNodes, countAllServers, nodesChanged2, serversChanged2, err := this.findClusterDNSChanges(cluster, records, domain.Name, defaultRoute)
 		if err != nil {
 			return nil, err
 		}
@@ -364,6 +389,8 @@ func (this *DNSDomainService) convertDomainToPB(domain *dns.DNSDomain) (*pb.DNSD
 		ProviderId:         int64(domain.ProviderId),
 		Name:               domain.Name,
 		IsOn:               domain.IsOn == 1,
+		IsUp:               domain.IsUp == 1,
+		IsDeleted:          domain.IsDeleted == 1,
 		DataUpdatedAt:      int64(domain.DataUpdatedAt),
 		CountNodeRecords:   int64(countNodeRecords),
 		NodesChanged:       nodesChanged,
@@ -388,12 +415,25 @@ func (this *DNSDomainService) convertRecordToPB(record *dnstypes.Record) *pb.DNS
 }
 
 // 检查集群节点变化
-func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster, records []*dnstypes.Record, domainName string) (result []maps.Map, doneNodeRecords []*dnstypes.Record, doneServerRecords []*dnstypes.Record, countAllNodes int64, countAllServers int64, nodesChanged bool, serversChanged bool, err error) {
+func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster, records []*dnstypes.Record, domainName string, defaultRoute string) (result []maps.Map, doneNodeRecords []*dnstypes.Record, doneServerRecords []*dnstypes.Record, countAllNodes int64, countAllServers int64, nodesChanged bool, serversChanged bool, err error) {
 	clusterId := int64(cluster.Id)
 	clusterDnsName := cluster.DnsName
 	clusterDomain := clusterDnsName + "." + domainName
 
 	tx := this.NullTx()
+
+	// 自动设置的cname记录
+	var cnameRecords = []string{}
+	var ttl int32
+	if len(cluster.Dns) > 0 {
+		dnsConfig, _ := cluster.DecodeDNSConfig()
+		if dnsConfig != nil {
+			cnameRecords = dnsConfig.CNameRecords
+			if dnsConfig.TTL > 0 {
+				ttl = dnsConfig.TTL
+			}
+		}
+	}
 
 	// 节点域名
 	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesDNSWithClusterId(tx, clusterId, true)
@@ -413,7 +453,7 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 	// 新增的节点域名
 	nodeKeys := []string{}
 	for _, node := range nodes {
-		ipAddresses, err := models.SharedNodeIPAddressDAO.FindNodeAccessIPAddresses(tx, int64(node.Id), nodeconfigs.NodeRoleNode)
+		ipAddresses, err := models.SharedNodeIPAddressDAO.FindNodeAccessAndUpIPAddresses(tx, int64(node.Id), nodeconfigs.NodeRoleNode)
 		if err != nil {
 			return nil, nil, nil, 0, 0, false, false, err
 		}
@@ -425,11 +465,16 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 			return nil, nil, nil, 0, 0, false, false, err
 		}
 		if len(routeCodes) == 0 {
-			continue
+			// 默认线路
+			if len(defaultRoute) > 0 {
+				routeCodes = []string{defaultRoute}
+			} else {
+				continue
+			}
 		}
 		for _, route := range routeCodes {
 			for _, ipAddress := range ipAddresses {
-				ip := ipAddress.Ip
+				ip := ipAddress.DNSIP()
 				if len(ip) == 0 {
 					continue
 				}
@@ -452,6 +497,7 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 							Type:  recordType,
 							Value: ip,
 							Route: route,
+							TTL:   ttl,
 						},
 					})
 					nodesChanged = true
@@ -508,6 +554,29 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 					Type:  dnstypes.RecordTypeCNAME,
 					Value: clusterDomain + ".",
 					Route: "", // 注意这里为空，需要在执行过程中获取默认值
+					TTL:   ttl,
+				},
+			})
+		} else {
+			doneServerRecords = append(doneServerRecords, record)
+		}
+	}
+
+	// 自动设置的CNAME
+	for _, cnameRecord := range cnameRecords {
+		serverDNSNames = append(serverDNSNames, cnameRecord)
+		record, ok := serverRecordsMap[cnameRecord]
+		if !ok {
+			serversChanged = true
+			result = append(result, maps.Map{
+				"action": "create",
+				"record": &dnstypes.Record{
+					Id:    "",
+					Name:  cnameRecord,
+					Type:  dnstypes.RecordTypeCNAME,
+					Value: clusterDomain + ".",
+					Route: "", // 注意这里为空，需要在执行过程中获取默认值
+					TTL:   ttl,
 				},
 			})
 		} else {
@@ -564,7 +633,7 @@ func (this *DNSDomainService) syncClusterDNS(req *pb.SyncDNSDomainDataRequest) (
 	}
 
 	// 域名信息
-	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, req.DnsDomainId)
+	domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, req.DnsDomainId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -616,7 +685,7 @@ func (this *DNSDomainService) syncClusterDNS(req *pb.SyncDNSDomainDataRequest) (
 
 	// 检查集群设置
 	for _, cluster := range clusters {
-		issues, err := models.SharedNodeClusterDAO.CheckClusterDNS(tx, cluster)
+		issues, err := dnsutils.CheckClusterDNS(tx, cluster)
 		if err != nil {
 			return nil, err
 		}
@@ -642,7 +711,7 @@ func (this *DNSDomainService) syncClusterDNS(req *pb.SyncDNSDomainDataRequest) (
 	// 对比变化
 	allChanges := []maps.Map{}
 	for _, cluster := range clusters {
-		changes, _, _, _, _, _, _, err := this.findClusterDNSChanges(cluster, records, domainName)
+		changes, _, _, _, _, _, _, err := this.findClusterDNSChanges(cluster, records, domainName, manager.DefaultRoute())
 		if err != nil {
 			return nil, err
 		}
@@ -693,7 +762,7 @@ func (this *DNSDomainService) syncClusterDNS(req *pb.SyncDNSDomainDataRequest) (
 	}, nil
 }
 
-// 检查域名是否在记录中
+// ExistDNSDomainRecord 检查域名是否在记录中
 func (this *DNSDomainService) ExistDNSDomainRecord(ctx context.Context, req *pb.ExistDNSDomainRecordRequest) (*pb.ExistDNSDomainRecordResponse, error) {
 	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
 	if err != nil {
@@ -707,4 +776,85 @@ func (this *DNSDomainService) ExistDNSDomainRecord(ctx context.Context, req *pb.
 		return nil, err
 	}
 	return &pb.ExistDNSDomainRecordResponse{IsOk: isOk}, nil
+}
+
+// SyncDNSDomainsFromProvider 从服务商同步域名
+func (this *DNSDomainService) SyncDNSDomainsFromProvider(ctx context.Context, req *pb.SyncDNSDomainsFromProviderRequest) (*pb.SyncDNSDomainsFromProviderResponse, error) {
+	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	tx := this.NullTx()
+	provider, err := dns.SharedDNSProviderDAO.FindEnabledDNSProvider(tx, req.DnsProviderId)
+	if err != nil {
+		return nil, err
+	}
+	if provider == nil {
+		return nil, errors.New("can not find provider")
+	}
+
+	// 下线不存在的域名
+	oldDomains, err := dns.SharedDNSDomainDAO.FindAllEnabledDomainsWithProviderId(tx, req.DnsProviderId)
+	if err != nil {
+		return nil, err
+	}
+
+	dnsProvider := dnsclients.FindProvider(provider.Type)
+	if dnsProvider == nil {
+		return nil, errors.New("provider type '" + provider.Type + "' is not supported yet")
+	}
+
+	params, err := provider.DecodeAPIParams()
+	if err != nil {
+		return nil, errors.New("decode params failed: " + err.Error())
+	}
+	err = dnsProvider.Auth(params)
+	if err != nil {
+		return nil, errors.New("auth failed: " + err.Error())
+	}
+
+	domainNames, err := dnsProvider.GetDomains()
+	if err != nil {
+		return nil, err
+	}
+
+	var hasChanges = false
+
+	// 创建或上线域名
+	for _, domainName := range domainNames {
+		domain, err := dns.SharedDNSDomainDAO.FindEnabledDomainWithName(tx, req.DnsProviderId, domainName)
+		if err != nil {
+			return nil, err
+		}
+		if domain == nil {
+			_, err = dns.SharedDNSDomainDAO.CreateDomain(tx, 0, 0, req.DnsProviderId, domainName)
+			if err != nil {
+				return nil, err
+			}
+			hasChanges = true
+		} else if domain.IsUp == 0 {
+			err = dns.SharedDNSDomainDAO.UpdateDomainIsUp(tx, int64(domain.Id), true)
+			if err != nil {
+				return nil, err
+			}
+			hasChanges = true
+		}
+	}
+
+	// 将老的域名置为下线
+	for _, oldDomain := range oldDomains {
+		var domainName = oldDomain.Name
+		if oldDomain.IsUp == 1 && !lists.ContainsString(domainNames, domainName) {
+			err = dns.SharedDNSDomainDAO.UpdateDomainIsUp(tx, int64(oldDomain.Id), false)
+			if err != nil {
+				return nil, err
+			}
+			hasChanges = true
+		}
+	}
+
+	return &pb.SyncDNSDomainsFromProviderResponse{
+		HasChanges: hasChanges,
+	}, nil
 }

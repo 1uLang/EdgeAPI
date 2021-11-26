@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	_ "github.com/go-sql-driver/mysql"
@@ -119,6 +120,7 @@ func (this *HTTPCachePolicyDAO) CreateCachePolicy(tx *dbs.Tx, isOn bool, name st
 		Life:                  &shared.TimeDuration{Count: 2, Unit: shared.TimeDurationUnitHour},
 		Status:                []int{200},
 		MaxSize:               &shared.SizeCapacity{Count: 32, Unit: shared.SizeCapacityUnitMB},
+		MinSize:               &shared.SizeCapacity{Count: 0, Unit: shared.SizeCapacityUnitKB},
 		SkipResponseSetCookie: true,
 		AllowChunkedEncoding:  true,
 		Conds: &shared.HTTPRequestCondsConfig{
@@ -155,6 +157,44 @@ func (this *HTTPCachePolicyDAO) CreateCachePolicy(tx *dbs.Tx, isOn bool, name st
 	return types.Int64(op.Id), nil
 }
 
+// CreateDefaultCachePolicy 创建默认的缓存策略
+func (this *HTTPCachePolicyDAO) CreateDefaultCachePolicy(tx *dbs.Tx, name string) (int64, error) {
+	var capacity = &shared.SizeCapacity{
+		Count: 64,
+		Unit:  shared.SizeCapacityUnitGB,
+	}
+	capacityJSON, err := capacity.AsJSON()
+	if err != nil {
+		return 0, err
+	}
+
+	var maxSize = &shared.SizeCapacity{
+		Count: 256,
+		Unit:  shared.SizeCapacityUnitMB,
+	}
+	if err != nil {
+		return 0, err
+	}
+	maxSizeJSON, err := maxSize.AsJSON()
+	if err != nil {
+		return 0, err
+	}
+
+	var storageOptions = &serverconfigs.HTTPFileCacheStorage{
+		Dir: "/opt/cache",
+	}
+	storageOptionsJSON, err := json.Marshal(storageOptions)
+	if err != nil {
+		return 0, err
+	}
+
+	policyId, err := this.CreateCachePolicy(tx, true, "\""+name+"\"缓存策略", "默认创建的缓存策略", capacityJSON, 0, maxSizeJSON, serverconfigs.CachePolicyStorageFile, storageOptionsJSON)
+	if err != nil {
+		return 0, err
+	}
+	return policyId, nil
+}
+
 // UpdateCachePolicy 修改缓存策略
 func (this *HTTPCachePolicyDAO) UpdateCachePolicy(tx *dbs.Tx, policyId int64, isOn bool, name string, description string, capacityJSON []byte, maxKeys int64, maxSizeJSON []byte, storageType string, storageOptionsJSON []byte) error {
 	if policyId <= 0 {
@@ -185,7 +225,16 @@ func (this *HTTPCachePolicyDAO) UpdateCachePolicy(tx *dbs.Tx, policyId int64, is
 }
 
 // ComposeCachePolicy 组合配置
-func (this *HTTPCachePolicyDAO) ComposeCachePolicy(tx *dbs.Tx, policyId int64) (*serverconfigs.HTTPCachePolicy, error) {
+func (this *HTTPCachePolicyDAO) ComposeCachePolicy(tx *dbs.Tx, policyId int64, cacheMap *utils.CacheMap) (*serverconfigs.HTTPCachePolicy, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":config:" + types.String(policyId)
+	var cache, _ = cacheMap.Get(cacheKey)
+	if cache != nil {
+		return cache.(*serverconfigs.HTTPCachePolicy), nil
+	}
+
 	policy, err := this.FindEnabledHTTPCachePolicy(tx, policyId)
 	if err != nil {
 		return nil, err
@@ -243,6 +292,10 @@ func (this *HTTPCachePolicyDAO) ComposeCachePolicy(tx *dbs.Tx, policyId int64) (
 		config.CacheRefs = refs
 	}
 
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, config)
+	}
+
 	return config, nil
 }
 
@@ -284,7 +337,7 @@ func (this *HTTPCachePolicyDAO) ListEnabledHTTPCachePolicies(tx *dbs.Tx, keyword
 
 	cachePolicies := []*serverconfigs.HTTPCachePolicy{}
 	for _, policyId := range cachePolicyIds {
-		cachePolicyConfig, err := this.ComposeCachePolicy(tx, policyId)
+		cachePolicyConfig, err := this.ComposeCachePolicy(tx, policyId, nil)
 		if err != nil {
 			return nil, errors.Wrap(err)
 		}

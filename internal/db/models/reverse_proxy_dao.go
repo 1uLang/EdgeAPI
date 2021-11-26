@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	_ "github.com/go-sql-driver/mysql"
@@ -80,7 +81,16 @@ func (this *ReverseProxyDAO) FindEnabledReverseProxy(tx *dbs.Tx, id int64) (*Rev
 }
 
 // ComposeReverseProxyConfig 根据ID组合配置
-func (this *ReverseProxyDAO) ComposeReverseProxyConfig(tx *dbs.Tx, reverseProxyId int64) (*serverconfigs.ReverseProxyConfig, error) {
+func (this *ReverseProxyDAO) ComposeReverseProxyConfig(tx *dbs.Tx, reverseProxyId int64, cacheMap *utils.CacheMap) (*serverconfigs.ReverseProxyConfig, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":config:" + types.String(reverseProxyId)
+	var cache, _ = cacheMap.Get(cacheKey)
+	if cache != nil {
+		return cache.(*serverconfigs.ReverseProxyConfig), nil
+	}
+
 	reverseProxy, err := this.FindEnabledReverseProxy(tx, reverseProxyId)
 	if err != nil {
 		return nil, err
@@ -113,7 +123,7 @@ func (this *ReverseProxyDAO) ComposeReverseProxyConfig(tx *dbs.Tx, reverseProxyI
 			return nil, err
 		}
 		for _, ref := range originRefs {
-			originConfig, err := SharedOriginDAO.ComposeOriginConfig(tx, ref.OriginId)
+			originConfig, err := SharedOriginDAO.ComposeOriginConfig(tx, ref.OriginId, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -130,7 +140,7 @@ func (this *ReverseProxyDAO) ComposeReverseProxyConfig(tx *dbs.Tx, reverseProxyI
 			return nil, err
 		}
 		for _, originConfig := range originRefs {
-			originConfig, err := SharedOriginDAO.ComposeOriginConfig(tx, originConfig.OriginId)
+			originConfig, err := SharedOriginDAO.ComposeOriginConfig(tx, originConfig.OriginId, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -179,6 +189,20 @@ func (this *ReverseProxyDAO) ComposeReverseProxyConfig(tx *dbs.Tx, reverseProxyI
 			return nil, err
 		}
 		config.IdleTimeout = idleTimeout
+	}
+
+	// PROXY Protocol
+	if IsNotNull(reverseProxy.ProxyProtocol) {
+		var proxyProtocolConfig = &serverconfigs.ProxyProtocolConfig{}
+		err = json.Unmarshal([]byte(reverseProxy.ProxyProtocol), proxyProtocolConfig)
+		if err != nil {
+			return nil, err
+		}
+		config.ProxyProtocol = proxyProtocolConfig
+	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, config)
 	}
 
 	return config, nil
@@ -275,7 +299,20 @@ func (this *ReverseProxyDAO) UpdateReverseProxyBackupOrigins(tx *dbs.Tx, reverse
 }
 
 // UpdateReverseProxy 修改是否启用
-func (this *ReverseProxyDAO) UpdateReverseProxy(tx *dbs.Tx, reverseProxyId int64, requestHostType int8, requestHost string, requestURI string, stripPrefix string, autoFlush bool, addHeaders []string, connTimeout *shared.TimeDuration, readTimeout *shared.TimeDuration, idleTimeout *shared.TimeDuration, maxConns int32, maxIdleConns int32) error {
+func (this *ReverseProxyDAO) UpdateReverseProxy(tx *dbs.Tx,
+	reverseProxyId int64,
+	requestHostType int8,
+	requestHost string,
+	requestURI string,
+	stripPrefix string,
+	autoFlush bool,
+	addHeaders []string,
+	connTimeout *shared.TimeDuration,
+	readTimeout *shared.TimeDuration,
+	idleTimeout *shared.TimeDuration,
+	maxConns int32,
+	maxIdleConns int32,
+	proxyProtocolJSON []byte) error {
 	if reverseProxyId <= 0 {
 		return errors.New("invalid reverseProxyId")
 	}
@@ -332,6 +369,10 @@ func (this *ReverseProxyDAO) UpdateReverseProxy(tx *dbs.Tx, reverseProxyId int64
 		op.MaxIdleConns = maxIdleConns
 	} else {
 		op.MaxIdleConns = 0
+	}
+
+	if len(proxyProtocolJSON) > 0 {
+		op.ProxyProtocol = proxyProtocolJSON
 	}
 
 	err = this.Save(tx, op)
@@ -393,6 +434,15 @@ func (this *ReverseProxyDAO) NotifyUpdate(tx *dbs.Tx, reverseProxyId int64) erro
 	}
 	if locationId > 0 {
 		return SharedHTTPLocationDAO.NotifyUpdate(tx, locationId)
+	}
+
+	// group
+	groupId, err := SharedServerGroupDAO.FindEnabledGroupIdWithReverseProxyId(tx, reverseProxyId)
+	if err != nil {
+		return err
+	}
+	if groupId > 0 {
+		return SharedServerGroupDAO.NotifyUpdate(tx, groupId)
 	}
 
 	return nil

@@ -474,6 +474,15 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 
 	var tx = this.NullTx()
 
+	// 默认集群
+	nodeClusters, err := models.SharedNodeClusterDAO.ListEnabledClusters(tx, "", 0, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodeClusters) > 0 {
+		result.DefaultNodeClusterId = int64(nodeClusters[0].Id)
+	}
+
 	// 集群数
 	countClusters, err := models.SharedNodeClusterDAO.CountAllEnabledClusters(tx, "")
 	if err != nil {
@@ -487,6 +496,13 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		return nil, err
 	}
 	result.CountNodes = countNodes
+
+	// 离线节点
+	countOfflineNodes, err := models.SharedNodeDAO.CountAllEnabledOfflineNodes(tx)
+	if err != nil {
+		return nil, err
+	}
+	result.CountOfflineNodes = countOfflineNodes
 
 	// 服务数
 	countServers, err := models.SharedServerDAO.CountAllEnabledServers(tx)
@@ -503,11 +519,18 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 	result.CountUsers = countUsers
 
 	// API节点数
-	countAPINodes, err := models.SharedAPINodeDAO.CountAllEnabledAPINodes(tx)
+	countAPINodes, err := models.SharedAPINodeDAO.CountAllEnabledAndOnAPINodes(tx)
 	if err != nil {
 		return nil, err
 	}
 	result.CountAPINodes = countAPINodes
+
+	// 离线API节点
+	countOfflineAPINodes, err := models.SharedAPINodeDAO.CountAllEnabledAndOnOfflineAPINodes(tx)
+	if err != nil {
+		return nil, err
+	}
+	result.CountOfflineAPINodes = countOfflineAPINodes
 
 	// 数据库节点数
 	countDBNodes, err := models.SharedDBNodeDAO.CountAllEnabledNodes(tx)
@@ -517,11 +540,18 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 	result.CountDBNodes = countDBNodes
 
 	// 用户节点数
-	countUserNodes, err := models.SharedUserNodeDAO.CountAllEnabledUserNodes(tx)
+	countUserNodes, err := models.SharedUserNodeDAO.CountAllEnabledAndOnUserNodes(tx)
 	if err != nil {
 		return nil, err
 	}
 	result.CountUserNodes = countUserNodes
+
+	// 离线用户节点数
+	countOfflineUserNodes, err := models.SharedUserNodeDAO.CountAllEnabledAndOnOfflineNodes(tx)
+	if err != nil {
+		return nil, err
+	}
+	result.CountOfflineUserNodes = countOfflineUserNodes
 
 	// 按日流量统计
 	dayFrom := timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
@@ -560,7 +590,7 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		})
 	}
 
-	// 是否是企业版
+	// 是否是商业版
 	isPlus, err := authority.SharedAuthorityKeyDAO.IsPlus(tx)
 	if err != nil {
 		return nil, err
@@ -620,8 +650,12 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 
 	// API节点升级信息
 	{
+		var apiVersion = req.ApiVersion
+		if len(apiVersion) == 0 {
+			apiVersion = teaconst.Version
+		}
 		upgradeInfo := &pb.ComposeAdminDashboardResponse_UpgradeInfo{
-			NewVersion: teaconst.Version,
+			NewVersion: apiVersion,
 		}
 		countNodes, err := models.SharedAPINodeDAO.CountAllLowerVersionNodes(tx, upgradeInfo.NewVersion)
 		if err != nil {
@@ -644,25 +678,36 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		result.NsNodeUpgradeInfo = upgradeInfo
 	}
 
-	// 域名排行
+	// Report节点升级信息
 	if isPlus {
-		topDomainStats, err := stats.SharedServerDomainHourlyStatDAO.FindTopDomainStats(tx, hourFrom, hourTo, 10)
+		upgradeInfo := &pb.ComposeAdminDashboardResponse_UpgradeInfo{
+			NewVersion: teaconst.ReportNodeVersion,
+		}
+		countNodes, err := models.SharedReportNodeDAO.CountAllLowerVersionNodes(tx, upgradeInfo.NewVersion)
 		if err != nil {
 			return nil, err
 		}
-		for _, stat := range topDomainStats {
-			result.TopDomainStats = append(result.TopDomainStats, &pb.ComposeAdminDashboardResponse_DomainStat{
-				ServerId:      int64(stat.ServerId),
-				Domain:        stat.Domain,
-				CountRequests: int64(stat.CountRequests),
-				Bytes:         int64(stat.Bytes),
-			})
-		}
+		upgradeInfo.CountNodes = countNodes
+		result.ReportNodeUpgradeInfo = upgradeInfo
+	}
+
+	// 域名排行
+	topDomainStats, err := stats.SharedServerDomainHourlyStatDAO.FindTopDomainStats(tx, hourFrom, hourTo, 10)
+	if err != nil {
+		return nil, err
+	}
+	for _, stat := range topDomainStats {
+		result.TopDomainStats = append(result.TopDomainStats, &pb.ComposeAdminDashboardResponse_DomainStat{
+			ServerId:      int64(stat.ServerId),
+			Domain:        stat.Domain,
+			CountRequests: int64(stat.CountRequests),
+			Bytes:         int64(stat.Bytes),
+		})
 	}
 
 	// 节点排行
 	if isPlus {
-		topNodeStats, err := stats.SharedNodeTrafficHourlyStatDAO.FindTopNodeStats(tx, "node", hourFrom, hourTo)
+		topNodeStats, err := stats.SharedNodeTrafficHourlyStatDAO.FindTopNodeStats(tx, "node", hourFrom, hourTo, 10)
 		if err != nil {
 			return nil, err
 		}
@@ -710,7 +755,7 @@ func (this *AdminService) UpdateAdminTheme(ctx context.Context, req *pb.UpdateAd
 // 查找集群、节点和服务的指标数据
 func (this *AdminService) findMetricDataCharts(tx *dbs.Tx) (result []*pb.MetricDataChart, err error) {
 	// 集群指标
-	items, err := models.SharedMetricItemDAO.FindAllPublicItems(tx)
+	items, err := models.SharedMetricItemDAO.FindAllPublicItems(tx, serverconfigs.MetricItemCategoryHTTP, nil)
 	if err != nil {
 		return nil, err
 	}

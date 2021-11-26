@@ -2,6 +2,7 @@ package models
 
 import (
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	_ "github.com/go-sql-driver/mysql"
@@ -33,6 +34,9 @@ var SharedNodeLogDAO *NodeLogDAO
 func init() {
 	dbs.OnReady(func() {
 		SharedNodeLogDAO = NewNodeLogDAO()
+
+		// 设置日志存储
+		remotelogs.SetDAO(SharedNodeLogDAO)
 	})
 }
 
@@ -71,7 +75,23 @@ func (this *NodeLogDAO) CreateLog(tx *dbs.Tx, nodeRole nodeconfigs.NodeRole, nod
 	op.Day = timeutil.FormatTime("Ymd", createdAt)
 	op.Hash = hash
 	op.Count = 1
+	op.IsRead = level != "error"
 	err = this.Save(tx, op)
+	return err
+}
+
+// DeleteExpiredLogsWithLevel 清除超出一定日期的某级别日志
+func (this *NodeLogDAO) DeleteExpiredLogsWithLevel(tx *dbs.Tx, level string, days int) error {
+	if days <= 0 {
+		return errors.New("invalid days '" + strconv.Itoa(days) + "'")
+	}
+	date := time.Now().AddDate(0, 0, -days)
+	expireDay := timeutil.Format("Ymd", date)
+	_, err := this.Query(tx).
+		Attr("level", level).
+		Where("day<=:day").
+		Param("day", expireDay).
+		Delete()
 	return err
 }
 
@@ -90,9 +110,20 @@ func (this *NodeLogDAO) DeleteExpiredLogs(tx *dbs.Tx, days int) error {
 }
 
 // CountNodeLogs 计算节点日志数量
-func (this *NodeLogDAO) CountNodeLogs(tx *dbs.Tx, role string, nodeId int64, serverId int64, originId int64, dayFrom string, dayTo string, keyword string, level string) (int64, error) {
-	query := this.Query(tx).
-		Attr("role", role)
+func (this *NodeLogDAO) CountNodeLogs(tx *dbs.Tx,
+	role string,
+	nodeId int64,
+	serverId int64,
+	originId int64,
+	dayFrom string,
+	dayTo string,
+	keyword string,
+	level string,
+	isUnread bool) (int64, error) {
+	query := this.Query(tx)
+	if len(role) > 0 {
+		query.Attr("role", role)
+	}
 	if nodeId > 0 {
 		query.Attr("nodeId", nodeId)
 	} else {
@@ -124,6 +155,9 @@ func (this *NodeLogDAO) CountNodeLogs(tx *dbs.Tx, role string, nodeId int64, ser
 	if len(level) > 0 {
 		query.Attr("level", level)
 	}
+	if isUnread {
+		query.Attr("isRead", 0)
+	}
 
 	return query.Count()
 }
@@ -140,10 +174,13 @@ func (this *NodeLogDAO) ListNodeLogs(tx *dbs.Tx,
 	keyword string,
 	level string,
 	fixedState configutils.BoolState,
+	isUnread bool,
 	offset int64,
 	size int64) (result []*NodeLog, err error) {
-	query := this.Query(tx).
-		Attr("role", role)
+	query := this.Query(tx)
+	if len(role) > 0 {
+		query.Attr("role", role)
+	}
 	if nodeId > 0 {
 		query.Attr("nodeId", nodeId)
 	} else {
@@ -182,6 +219,9 @@ func (this *NodeLogDAO) ListNodeLogs(tx *dbs.Tx,
 	if len(level) > 0 {
 		query.Attr("level", level)
 	}
+	if isUnread {
+		query.Attr("isRead", 0)
+	}
 	_, err = query.
 		Offset(offset).
 		Limit(size).
@@ -219,4 +259,33 @@ func (this *NodeLogDAO) UpdateNodeLogFixed(tx *dbs.Tx, logId int64) error {
 	}
 
 	return nil
+}
+
+// CountAllUnreadNodeLogs 计算未读的日志数量
+func (this *NodeLogDAO) CountAllUnreadNodeLogs(tx *dbs.Tx) (int64, error) {
+	return this.Query(tx).
+		Attr("isRead", false).
+		Count()
+}
+
+// UpdateNodeLogsRead 设置日志为已读
+func (this *NodeLogDAO) UpdateNodeLogsRead(tx *dbs.Tx, nodeLogIds []int64) error {
+	for _, logId := range nodeLogIds {
+		err := this.Query(tx).
+			Pk(logId).
+			Set("isRead", true).
+			UpdateQuickly()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpdateAllNodeLogsRead 设置所有日志为已读
+func (this *NodeLogDAO) UpdateAllNodeLogsRead(tx *dbs.Tx) error {
+	return this.Query(tx).
+		Attr("isRead", false).
+		Set("isRead", true).
+		UpdateQuickly()
 }

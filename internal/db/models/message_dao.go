@@ -40,9 +40,15 @@ const (
 	MessageTypeServerNamesAuditingFailed  MessageType = "ServerNamesAuditingFailed"  // 服务域名审核失败
 	MessageTypeThresholdSatisfied         MessageType = "ThresholdSatisfied"         // 满足阈值
 	MessageTypeFirewallEvent              MessageType = "FirewallEvent"              // 防火墙事件
+	MessageTypeIPAddrUp                   MessageType = "IPAddrUp"                   // IP地址上线
+	MessageTypeIPAddrDown                 MessageType = "IPAddrDown"                 // IP地址下线
 
-	MessageTypeNSNodeInactive MessageType = "NSNodeInactive" // 边缘节点不活跃
-	MessageTypeNSNodeActive   MessageType = "NSNodeActive"   // 边缘节点活跃
+	MessageTypeNSNodeInactive MessageType = "NSNodeInactive" // NS节点不活跃
+	MessageTypeNSNodeActive   MessageType = "NSNodeActive"   // NS节点活跃
+
+	MessageTypeReportNodeInactive MessageType = "ReportNodeInactive" // 区域监控节点节点不活跃
+	MessageTypeReportNodeActive   MessageType = "ReportNodeActive"   // 区域监控节点活跃
+	MessageTypeConnectivity       MessageType = "Connectivity"
 )
 
 type MessageDAO dbs.DAO
@@ -104,11 +110,7 @@ func (this *MessageDAO) CreateClusterMessage(tx *dbs.Tx, role string, clusterId 
 	}
 
 	// 发送给媒介接收人
-	err = SharedMessageTaskDAO.CreateMessageTasks(tx, MessageTaskTarget{
-		ClusterId: clusterId,
-		NodeId:    0,
-		ServerId:  0,
-	}, messageType, subject, body)
+	err = SharedMessageTaskDAO.CreateMessageTasks(tx, role, 0, 0, 0, messageType, subject, body)
 	if err != nil {
 		return err
 	}
@@ -117,48 +119,31 @@ func (this *MessageDAO) CreateClusterMessage(tx *dbs.Tx, role string, clusterId 
 }
 
 // CreateNodeMessage 创建节点消息
-func (this *MessageDAO) CreateNodeMessage(tx *dbs.Tx, role string, clusterId int64, nodeId int64, messageType MessageType, level string, subject string, body string, paramsJSON []byte) error {
+func (this *MessageDAO) CreateNodeMessage(tx *dbs.Tx, role string, clusterId int64, nodeId int64, messageType MessageType, level string, subject string, body string, paramsJSON []byte, force bool) error {
 	// 检查N分钟内是否已经发送过
 	hash := this.calHash(role, clusterId, nodeId, subject, body, paramsJSON)
-	exists, err := this.Query(tx).
-		Attr("hash", hash).
-		Gt("createdAt", time.Now().Unix()-10*60). // 10分钟
-		Exist()
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
-	_, err = this.createMessage(tx, role, clusterId, nodeId, messageType, level, subject, body, paramsJSON)
-	if err != nil {
-		return err
-	}
-
-	// TODO 目前只支持边缘节点发送消息，将来要支持NS节点
-	if role == nodeconfigs.NodeRoleNode {
-		// 发送给媒介接收人 - 集群
-		err = SharedMessageTaskDAO.CreateMessageTasks(tx, MessageTaskTarget{
-			ClusterId: clusterId,
-			NodeId:    0,
-			ServerId:  0,
-		}, messageType, subject, body)
+	if !force {
+		exists, err := this.Query(tx).
+			Attr("hash", hash).
+			Gt("createdAt", time.Now().Unix()-10*60). // 10分钟
+			Exist()
 		if err != nil {
 			return err
 		}
-
-		// 发送给媒介接收人 - 节点
-		if nodeId > 0 {
-			err = SharedMessageTaskDAO.CreateMessageTasks(tx, MessageTaskTarget{
-				ClusterId: clusterId,
-				NodeId:    nodeId,
-				ServerId:  0,
-			}, messageType, subject, body)
-			if err != nil {
-				return err
-			}
+		if exists {
+			return nil
 		}
+	}
+
+	_, err := this.createMessage(tx, role, clusterId, nodeId, messageType, level, subject, body, paramsJSON)
+	if err != nil {
+		return err
+	}
+
+	// 发送给媒介接收人 - 集群
+	err = SharedMessageTaskDAO.CreateMessageTasks(tx, role, clusterId, nodeId, 0, messageType, subject, body)
+	if err != nil {
+		return err
 	}
 
 	return nil

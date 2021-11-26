@@ -1,7 +1,6 @@
 package configs
 
 import (
-	"fmt"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/go-yaml/yaml"
 	"github.com/iwind/TeaGo/Tea"
@@ -11,9 +10,8 @@ import (
 )
 
 var sharedAPIConfig *APIConfig = nil
-var PaddingId string
 
-// API节点配置
+// APIConfig API节点配置
 type APIConfig struct {
 	NodeId string `yaml:"nodeId" json:"nodeId"`
 	Secret string `yaml:"secret" json:"secret"`
@@ -21,7 +19,7 @@ type APIConfig struct {
 	numberId int64 // 数字ID
 }
 
-// 获取共享配置
+// SharedAPIConfig 获取共享配置
 func SharedAPIConfig() (*APIConfig, error) {
 	sharedLocker.Lock()
 	defer sharedLocker.Unlock()
@@ -72,7 +70,7 @@ func SharedAPIConfig() (*APIConfig, error) {
 	{
 		dbConfigFile := Tea.ConfigFile("db.yaml")
 		_, err := os.Stat(dbConfigFile)
-		if err == nil {
+		if err != nil {
 			paths := []string{}
 			homeDir, homeErr := os.UserHomeDir()
 			if homeErr == nil {
@@ -96,18 +94,18 @@ func SharedAPIConfig() (*APIConfig, error) {
 	return config, nil
 }
 
-// 设置数字ID
+// SetNumberId 设置数字ID
 func (this *APIConfig) SetNumberId(numberId int64) {
 	this.numberId = numberId
-	PaddingId = fmt.Sprintf("%08d", numberId)
+	teaconst.NodeId = numberId
 }
 
-// 获取数字ID
+// NumberId 获取数字ID
 func (this *APIConfig) NumberId() int64 {
 	return this.numberId
 }
 
-// 保存到文件
+// WriteFile 保存到文件
 func (this *APIConfig) WriteFile(path string) error {
 	data, err := yaml.Marshal(this)
 	if err != nil {

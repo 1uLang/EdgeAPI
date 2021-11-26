@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/sslconfigs"
@@ -86,7 +87,7 @@ func (this *OriginDAO) FindOriginName(tx *dbs.Tx, id int64) (string, error) {
 }
 
 // CreateOrigin 创建源站
-func (this *OriginDAO) CreateOrigin(tx *dbs.Tx, adminId int64, userId int64, name string, addrJSON string, description string, weight int32, isOn bool, connTimeout *shared.TimeDuration, readTimeout *shared.TimeDuration, idleTimeout *shared.TimeDuration, maxConns int32, maxIdleConns int32) (originId int64, err error) {
+func (this *OriginDAO) CreateOrigin(tx *dbs.Tx, adminId int64, userId int64, name string, addrJSON string, description string, weight int32, isOn bool, connTimeout *shared.TimeDuration, readTimeout *shared.TimeDuration, idleTimeout *shared.TimeDuration, maxConns int32, maxIdleConns int32, domains []string) (originId int64, err error) {
 	op := NewOriginOperator()
 	op.AdminId = adminId
 	op.UserId = userId
@@ -131,6 +132,17 @@ func (this *OriginDAO) CreateOrigin(tx *dbs.Tx, adminId int64, userId int64, nam
 		weight = 0
 	}
 	op.Weight = weight
+
+	if len(domains) > 0 {
+		domainsJSON, err := json.Marshal(domains)
+		if err != nil {
+			return 0, err
+		}
+		op.Domains = domainsJSON
+	} else {
+		op.Domains = "[]"
+	}
+
 	op.State = OriginStateEnabled
 	err = this.Save(tx, op)
 	if err != nil {
@@ -140,7 +152,7 @@ func (this *OriginDAO) CreateOrigin(tx *dbs.Tx, adminId int64, userId int64, nam
 }
 
 // UpdateOrigin 修改源站
-func (this *OriginDAO) UpdateOrigin(tx *dbs.Tx, originId int64, name string, addrJSON string, description string, weight int32, isOn bool, connTimeout *shared.TimeDuration, readTimeout *shared.TimeDuration, idleTimeout *shared.TimeDuration, maxConns int32, maxIdleConns int32) error {
+func (this *OriginDAO) UpdateOrigin(tx *dbs.Tx, originId int64, name string, addrJSON string, description string, weight int32, isOn bool, connTimeout *shared.TimeDuration, readTimeout *shared.TimeDuration, idleTimeout *shared.TimeDuration, maxConns int32, maxIdleConns int32, domains []string) error {
 	if originId <= 0 {
 		return errors.New("invalid originId")
 	}
@@ -188,6 +200,17 @@ func (this *OriginDAO) UpdateOrigin(tx *dbs.Tx, originId int64, name string, add
 
 	op.IsOn = isOn
 	op.Version = dbs.SQL("version+1")
+
+	if len(domains) > 0 {
+		domainsJSON, err := json.Marshal(domains)
+		if err != nil {
+			return err
+		}
+		op.Domains = domainsJSON
+	} else {
+		op.Domains = "[]"
+	}
+
 	err := this.Save(tx, op)
 	if err != nil {
 		return err
@@ -197,7 +220,16 @@ func (this *OriginDAO) UpdateOrigin(tx *dbs.Tx, originId int64, name string, add
 }
 
 // ComposeOriginConfig 将源站信息转换为配置
-func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64) (*serverconfigs.OriginConfig, error) {
+func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap *utils.CacheMap) (*serverconfigs.OriginConfig, error) {
+	if cacheMap == nil {
+		cacheMap = utils.NewCacheMap()
+	}
+	var cacheKey = this.Table + ":config:" + types.String(originId)
+	var cache, _ = cacheMap.Get(cacheKey)
+	if cache != nil {
+		return cache.(*serverconfigs.OriginConfig), nil
+	}
+
 	origin, err := this.FindEnabledOrigin(tx, originId)
 	if err != nil {
 		return nil, err
@@ -219,6 +251,7 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64) (*serverc
 		MaxIdleConns: int(origin.MaxIdleConns),
 		RequestURI:   origin.HttpRequestURI,
 		RequestHost:  origin.Host,
+		Domains:      origin.DecodeDomains(),
 	}
 
 	if IsNotNull(origin.Addr) {
@@ -313,7 +346,7 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64) (*serverc
 		}
 		config.CertRef = ref
 		if ref.CertId > 0 {
-			certConfig, err := SharedSSLCertDAO.ComposeCertConfig(tx, ref.CertId)
+			certConfig, err := SharedSSLCertDAO.ComposeCertConfig(tx, ref.CertId, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -323,6 +356,10 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64) (*serverc
 
 	if IsNotNull(origin.Ftp) {
 		// TODO
+	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, config)
 	}
 
 	return config, nil

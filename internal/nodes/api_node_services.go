@@ -49,6 +49,16 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		this.rest(instance)
 	}
 	{
+		instance := this.serviceInstance(&services.NodeIPAddressLogService{}).(*services.NodeIPAddressLogService)
+		pb.RegisterNodeIPAddressLogServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		instance := this.serviceInstance(&services.NodeIPAddressThresholdService{}).(*services.NodeIPAddressThresholdService)
+		pb.RegisterNodeIPAddressThresholdServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
 		instance := this.serviceInstance(&services.APINodeService{}).(*services.APINodeService)
 		pb.RegisterAPINodeServiceServer(server, instance)
 		this.rest(instance)
@@ -156,6 +166,11 @@ func (this *APINode) registerServices(server *grpc.Server) {
 	{
 		instance := this.serviceInstance(&services.NodeLogService{}).(*services.NodeLogService)
 		pb.RegisterNodeLogServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		instance := this.serviceInstance(&services.NodeLoginService{}).(*services.NodeLoginService)
+		pb.RegisterNodeLoginServiceServer(server, instance)
 		this.rest(instance)
 	}
 	{
@@ -291,6 +306,16 @@ func (this *APINode) registerServices(server *grpc.Server) {
 	{
 		instance := this.serviceInstance(&services.ACMEAuthenticationService{}).(*services.ACMEAuthenticationService)
 		pb.RegisterACMEAuthenticationServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		instance := this.serviceInstance(&services.ACMEProviderService{}).(*services.ACMEProviderService)
+		pb.RegisterACMEProviderServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		instance := this.serviceInstance(&services.ACMEProviderAccountService{}).(*services.ACMEProviderAccountService)
+		pb.RegisterACMEProviderAccountServiceServer(server, instance)
 		this.rest(instance)
 	}
 	{
@@ -501,10 +526,22 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		this.rest(instance)
 	}
 
-	//plus
-	APIAuthorityKeyServicesRegister(this,server)
+	{
+		instance := this.serviceInstance(&services.PlanService{}).(*services.PlanService)
+		pb.RegisterPlanServiceServer(server, instance)
+		this.rest(instance)
+	}
 
-	//APINodeServicesRegister(this, server)
+	{
+		instance := this.serviceInstance(&services.UserPlanService{}).(*services.UserPlanService)
+		pb.RegisterUserPlanServiceServer(server, instance)
+		this.rest(instance)
+	}
+
+	//plus
+	APIAuthorityKeyServicesRegister(this, server)
+
+	APINodeServicesRegister(this, server)
 
 	// TODO check service names
 	for serviceName := range server.GetServiceInfo() {

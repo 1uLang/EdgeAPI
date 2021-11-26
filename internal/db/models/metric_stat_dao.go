@@ -22,7 +22,7 @@ func init() {
 		var ticker = time.NewTicker(time.Duration(rands.Int(24, 48)) * time.Hour)
 		go func() {
 			for range ticker.C {
-				err := SharedMetricStatDAO.Clean(nil, 120) // 只保留120天
+				err := SharedMetricStatDAO.Clean(nil, 30) // 只保留30天
 				if err != nil {
 					logs.Println("SharedMetricStatDAO: clean expired data failed: " + err.Error())
 				}
@@ -197,6 +197,7 @@ func (this *MetricStatDAO) FindItemStatsWithClusterIdAndLastTime(tx *dbs.Tx, clu
 	var lastTime = lastStat.Time
 
 	var query = this.Query(tx).
+		UseIndex("cluster_item_time").
 		Attr("clusterId", clusterId).
 		Attr("itemId", itemId).
 		Attr("version", version).
@@ -243,6 +244,7 @@ func (this *MetricStatDAO) FindItemStatsWithNodeIdAndLastTime(tx *dbs.Tx, nodeId
 	var lastStat = statOne.(*MetricStat)
 	var lastTime = lastStat.Time
 	var query = this.Query(tx).
+		UseIndex("node_item_time").
 		Attr("nodeId", nodeId).
 		Attr("itemId", itemId).
 		Attr("version", version).
@@ -290,6 +292,7 @@ func (this *MetricStatDAO) FindItemStatsWithServerIdAndLastTime(tx *dbs.Tx, serv
 	var lastTime = lastStat.Time
 
 	var query = this.Query(tx).
+		UseIndex("server_item_time").
 		Attr("serverId", serverId).
 		Attr("itemId", itemId).
 		Attr("version", version).
