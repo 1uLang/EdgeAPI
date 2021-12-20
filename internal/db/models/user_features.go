@@ -125,8 +125,9 @@ var (
 			Description: "用户可以添加TCP/TLS负载均衡服务",
 		},
 		{
-			Name:        "自定义负载均衡端口",
-			Code:        "lb-tcp.lb-tcp-port",
+			Name: "自定义负载均衡端口",
+			Code: "lb-tcp.lb-tcp-port",
+			//Code:        "lb-tcp.port",
 			Description: "用户可以自定义TCP端口",
 		},
 		{

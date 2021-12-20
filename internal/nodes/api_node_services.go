@@ -542,6 +542,10 @@ func (this *APINode) registerServices(server *grpc.Server) {
 	APIAuthorityKeyServicesRegister(this, server)
 
 	APINodeServicesRegister(this, server)
+	//plus
+	//APIAuthorityKeyServicesRegister(this,server)
+
+	//APINodeServicesRegister(this, server)
 
 	// TODO check service names
 	for serviceName := range server.GetServiceInfo() {
