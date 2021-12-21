@@ -40,11 +40,11 @@ var (
 			Code:        "waf.apt",
 			Description: "用户可以查看恶意流量IP",
 		},
-		{
-			Name:        "网络防病毒",
-			Code:        "waf.netnet",
-			Description: "网络防病毒",
-		},
+		//{
+		//	Name:        "网络防病毒",
+		//	Code:        "waf.netnet",
+		//	Description: "网络防病毒",
+		//},
 		{
 			Name:        "WAF日志",
 			Code:        "waf.logs",
