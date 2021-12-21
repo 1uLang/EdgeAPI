@@ -271,6 +271,11 @@ var (
 			Description: "用户拥有针对应用的安全审计功能",
 		},
 		{
+			Name:        "设备管理",
+			Code:        "audit.device",
+			Description: "用户拥有针对设备的安全审计功能",
+		},
+		{
 			Name:        "审计日志",
 			Code:        "audit.logs",
 			Description: "用户可以查看该用户下所有资产的审计日志",
